@@ -349,7 +349,7 @@ structure demolition when it finds none.
 
 ### 9.2 `cre` — the per-tick world frame
 
-Broadcast once per tick whenever at least one player is connected:
+Sent once per tick to each player whenever at least one player is connected:
 
 ```jsonc
 {
@@ -357,12 +357,27 @@ Broadcast once per tick whenever at least one player is connected:
   "c": [ ["c12", 640.25, 641.00, "crawler"] ],   // id, x, y, type
   "a": [ ["a3", 182.50, 179.75, "deer"] ],       // id, x, y, species
   "f": [ ["camp-woods-0", 174.12, 188.40, "villager", "walk"] ], // §13 — id, x, y, kind, act
-  "time": 0.3141, "day": 2
+  "time": 0.3141, "day": 2,
+  "r": 40                                        // §9.2.1 interest radius, tiles
 }
 ```
 
 Positions are rounded to 2 decimal places and the clock to 4, matching the legacy
 `+v.toFixed(n)`. Both arrays are emitted in **spawn order**, not map order (see §9.6).
+
+#### 9.2.1 Interest radius and backlog
+
+Each player's frame carries only the creatures, animals and folk within `r` tiles
+(Euclidean, `room.InterestRadius` = 40) of that player's position; the view is about 22
+tiles across. Something that leaves the frame while near the edge of `r` walked out of
+range — the client removes it silently and plays a death only for things that vanish
+well inside it (`src/main.ts`, `outOfRange`). The legacy server sends everything and no `r`.
+
+`cre` is a snapshot the next tick supersedes, so a player whose outbound queue is at
+least half full (`Session.Backlogged`) is **skipped** for that tick rather than queued
+another frame. A browser that stalls briefly (a long frame, a tab switch) therefore
+catches up instead of overflowing its queue and being dropped (`dropSlow`). Every other
+frame type is still always queued.
 
 Creature types: `crawler`, `stalker`, `brute`, `wisp`, `husk_wolf`, `bog_shambler`,
 `frost_wraith`, `drowned`, `blight_lancer`.

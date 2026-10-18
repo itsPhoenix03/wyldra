@@ -66,6 +66,12 @@ func (s *Session) Close() {
 // when the queue is full, which the room treats as "this client is not keeping
 // up" and answers by dropping the connection. A slow client must never stall
 // the world tick, so there is deliberately no blocking path here.
+// Backlogged reports a client that is falling behind: half its outbound queue is
+// still waiting. Snapshot frames that the next tick supersedes (`cre`) are skipped
+// for it rather than queued, so a briefly stalled browser catches up instead of
+// overflowing the queue and being dropped (dropSlow).
+func (s *Session) Backlogged() bool { return len(s.Out) >= OutboundBuffer/2 }
+
 func (s *Session) trySend(b []byte) bool {
 	select {
 	case <-s.closed:

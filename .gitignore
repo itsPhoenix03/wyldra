@@ -2,6 +2,10 @@
 node_modules/
 dist/
 
+# baked by tools/atlas/build-atlases.mjs (npm run atlas) — derived from the SVGs, never committed
+assets/atlas/
+src/generated/
+
 # runtime state (world save — delete-able, never commit)
 server/save.json
 gameserver/world.save.json

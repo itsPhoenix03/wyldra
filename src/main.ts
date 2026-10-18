@@ -29,11 +29,15 @@ import { GameAudio } from "./audio.ts";
 import { FolkView, type FolkHost } from "./folk.ts";
 import { creatureLookAt, sampleCreature, tickAnimalGait, tickCreatureGait, type LookTarget } from "./creatureGait.ts";
 import { getSetting } from "./settings.ts";
-import { ANI_VIEWS, ASSET_MANIFEST, HUMAN_CLIPS, NODE_SPR, POP_FRAME_MS, POP_RES, STRUCT_SPR, humanFrame } from "./assets.ts";
+import { ANI_VIEWS, HUMAN_CLIPS, KEEPER_PACK, NODE_SPR, POP_FRAME_MS, POP_RES, STRUCT_SPR, ZONE_PACKS, humanFrame, humanPack } from "./assets.ts";
+import { BOOT_PACKS, packBitmap } from "./atlasData.ts";
+import { PackLoader } from "./atlas.ts";
+import { zonesNear } from "./zones.ts";
+import { DevOverlay } from "./devOverlay.ts";
 import { pickView, viewKey, type View } from "./facing.ts";
 import { ROTATABLE_MODS, facing, facingCount } from "./rotation.ts";
 import { TileStore, UNLOADED, CHUNK, type ChunkMsg } from "./tiles.ts";
-import { LEGACY, LEGACY_WS_PORT, requestJoin, identityToken } from "./net.ts";
+import { LEGACY, LEGACY_WS_PORT, takeJoin, identityToken } from "./net.ts";
 
 const TW = 64,
   TH = 32;
@@ -399,13 +403,18 @@ class Hearth extends Phaser.Scene {
     };
   }
 
-  preload() {
-    for (const [k, u, w, h] of ASSET_MANIFEST)
-      this.load.svg(k, u, { width: w, height: h });
-  }
+  // Atlas packs (src/atlas.ts): the boot packs are decoded before the game exists
+  // (startGame) and installed first thing in create(); each island's folk clips
+  // stream in as the player commits to it (streamZones) or a folk member walks
+  // into view (needHuman). Nothing is loaded through Phaser's loader any more.
+  packs!: PackLoader;
+  private zoneCheckAt = 0;
+  dev!: DevOverlay;
 
   create() {
     activeScene = this;
+    this.packs = new PackLoader(this.textures, () => !this.quitting && !!this.sys.game, (p) => this.onPackInstalled(p));
+    for (const p of BOOT_PACKS) this.packs.installNow(p, bootBitmaps.get(p)!);
     // dev server only (stripped from production builds): lets tools/media/capture.mjs
     // drive a scripted session for the README clips
     if ((import.meta as any).env?.DEV) (window as any).__hearth = this;
@@ -413,8 +422,8 @@ class Hearth extends Phaser.Scene {
     this.makeWeatherFx();
     this.makeGlowTextures();
     this.registerBirdAnims();
-    this.registerHumanAnims();
     this.registerPopAnims();
+    this.dev = new DevOverlay(this);
     // Task 5: player display name
     const urlName = new URLSearchParams(location.search).get("name");
     if (urlName) {
@@ -596,12 +605,22 @@ class Hearth extends Phaser.Scene {
       `<button data-cmd="god">🛡 God toggle</button>` +
       `<button data-cmd="kill">💀 Kill</button>` +
       `<button data-cmd="kit">🎁 Full kit</button></div>` +
+      `<div style="color:#9ab;margin:6px 0 4px">Debug view</div>` +
+      `<label style="cursor:pointer"><input type="checkbox" id="devRanges"> Combat ranges + motion lines</label>` +
+      `<div style="color:#789;font-size:11px;line-height:1.5;margin-top:3px">` +
+      `<span style="color:#5fd4ff">■</span> you: swing reach 2.4, line to target<br>` +
+      `<span style="color:#9be37a">■</span> other players: swing reach<br>` +
+      `<span style="color:#ff5a4a">■</span> enemy contact 1.1 · <span style="color:#ffa040">■</span> ranged band<br>` +
+      `<span style="color:#c08cff">■</span> wraith dart range · arrows: next 1s of motion</div>` +
       `</div>` +
       `<style>#devPanel button{background:#2a3a4a;color:#fff;border:1px solid #57a;border-radius:4px;` +
       `margin:2px;padding:3px 7px;cursor:pointer;font:12px monospace}#devPanel button:hover{background:#3a5a4a}` +
       `#devSpawnSel{width:100%;background:#1a222c;color:#fff;border:1px solid #57a;border-radius:4px;` +
       `font:12px monospace;padding:3px}</style>`;
     document.body.appendChild(d);
+    const ranges = document.getElementById("devRanges") as HTMLInputElement;
+    ranges.checked = this.dev.rangesOn;
+    ranges.addEventListener("change", () => this.dev.setRanges(ranges.checked));
     d.addEventListener("click", (e) => {
       const b = (e.target as HTMLElement).closest("button") as HTMLButtonElement | null;
       if (!b || !this.devEnabled) return;
@@ -637,7 +656,7 @@ class Hearth extends Phaser.Scene {
    * (docs/10_GO_WIRE_PROTOCOL.md §1). Identity comes from the ticket, never from us.
    */
   private connectViaControlPlane() {
-    requestJoin(this.myName)
+    takeJoin(this.myName)
       .then((j) => {
         if (this.quitting || !this.scene.isActive()) return;
         if (j.name) this.myName = j.name;
@@ -674,6 +693,7 @@ class Hearth extends Phaser.Scene {
     this.ws.onopen = onOpen;
     this.ws.onmessage = (e) => {
       if (this.quitting) return;
+      this.dev.onNet(e.data.length);
       this.onMsg(JSON.parse(e.data));
     };
     this.ws.onclose = () => {
@@ -826,9 +846,10 @@ class Hearth extends Phaser.Scene {
     }
   }
 
-  /** `<char>_<action>` anims for NPC/medic sprites (the player rig samples frames itself). */
-  registerHumanAnims() {
+  /** `<char>_<action>` anims for NPC/medic sprites (the player rig samples frames itself), once `pack` is in. */
+  registerHumanAnims(pack: string) {
     for (const [c, a, n] of HUMAN_CLIPS) {
+      if (c !== pack || this.anims.exists(`${c}_${a}`)) continue;
       this.anims.create({
         key: `${c}_${a}`,
         frames: Array.from({ length: n }, (_, i) => ({ key: humanFrame(c, a, i + 1) })),
@@ -836,6 +857,27 @@ class Hearth extends Phaser.Scene {
         repeat: a.endsWith("walk") || a.endsWith("sit") ? -1 : 0,   // walk / sit, any view
       });
     }
+  }
+
+  private onPackInstalled(pack: string) {
+    this.registerHumanAnims(pack);
+    if (pack !== "base" && pack !== KEEPER_PACK) this.folk.refreshKind(pack);
+  }
+
+  /** FolkHost: a folk member of `kind` is in view, so its clips are needed now. */
+  needHuman(kind: string) {
+    const p = humanPack(kind);
+    if (p) this.packs.ensure(p);
+  }
+
+  /**
+   * Stream the folk clips of the island the player is on or committed to (src/zones.ts).
+   * Twice a second is plenty: at boat speed that is 3 tiles, against ~110 tiles of lead.
+   */
+  private streamZones(t: number) {
+    if (t < this.zoneCheckAt) return;
+    this.zoneCheckAt = t + 500;
+    for (const z of zonesNear(this.px, this.py)) for (const p of ZONE_PACKS[z]) this.packs.ensure(p);
   }
 
   /** The Starmetal Armor turned (some of) a creature hit: a shield glint over the keeper. */
@@ -2046,8 +2088,17 @@ class Hearth extends Phaser.Scene {
         sampleCreature(s, x, y, this.time.now); // ground speed + facing, before cx/cy move on
         s.setData("tx", p.x).setData("ty", p.y).setData("cx", x).setData("cy", y);
       }
+      // The Go server sends only what is within `r` tiles of us (§ interest, docs/10).
+      // Something missing from the frame near that edge walked out of range rather
+      // than died: drop it quietly. The legacy server sends everything and no `r`.
+      const outOfRange = (s: Phaser.GameObjects.Sprite) =>
+        m.r > 0 && Math.hypot(s.getData("cx") - this.px, s.getData("cy") - this.py) > m.r - 3;
       for (const [cid, s] of this.creSpr)
-        if (!seen.has(cid)) {
+        if (!seen.has(cid) && outOfRange(s)) {
+          s.getData("jShadow")?.destroy();
+          s.destroy();
+          this.creSpr.delete(cid);
+        } else if (!seen.has(cid)) {
           // death tween: 120 ms scale→0.7, alpha→0, angle±20, then 4 particles (Guide §2.4)
           this.audio.killmob();
           // essence from a kill we were fighting pops out of the body
@@ -2105,7 +2156,7 @@ class Hearth extends Phaser.Scene {
       this.folk.sync(m.f);
       for (const [aid, s] of this.aniSpr)
         if (!aseen.has(aid)) {
-          if (this.me && Math.hypot(s.x - this.me.x, s.y - this.me.y) < 200)
+          if (this.me && !outOfRange(s) && Math.hypot(s.x - this.me.x, s.y - this.me.y) < 200)
             this.lastGainSrc = { x: s.x, y: s.y, at: this.time.now };   // meat from the hunt
           s.destroy();
           this.aniSpr.delete(aid);
@@ -3033,7 +3084,9 @@ class Hearth extends Phaser.Scene {
   }
 
   update(t: number, dtMs: number) {
+    this.dev.update(t);
     if (!this.ready) return;
+    this.streamZones(t);
     const dt = Math.min(dtMs / 1000, 0.05);
     const k = this.keys;
     let dx = +(k.D.isDown || k.RIGHT.isDown) - +(k.A.isDown || k.LEFT.isDown);
@@ -3635,6 +3688,7 @@ export function quitToMenu(opts: { confirm?: boolean; error?: string } = {}) {
   //    listener bound to that scene — leaving it in the DOM would both leak and make
   //    buildDevPanel() short-circuit on re-join, wiring F10 to a dead scene.
   document.getElementById("devPanel")?.remove();
+  document.getElementById("devMeter")?.remove();
 
   // 6. Cancel any in-flight showMsg timer (e.g. a long error toast) and hide the HUD.
   showMsg("", 1);
@@ -3649,8 +3703,9 @@ export function quitToMenu(opts: { confirm?: boolean; error?: string } = {}) {
   // 8. The camera clamp counter-scales the DOM; the menu must not inherit that factor.
   document.documentElement.style.setProperty("--uiz", "1");
 
-  // 9. Allow startGame() to boot a fresh world, then let the menu take over.
+  // 9. Allow startGame() to boot a fresh world (cancelling one still loading), then let the menu take over.
   gameStarted = false;
+  bootSeq++;
   window.dispatchEvent(
     new CustomEvent("hearth:quit", { detail: { error: opts.error } }),
   );
@@ -3663,9 +3718,25 @@ document.addEventListener("click", (e) => {
   if (t?.closest?.("#quitBtn")) quitToMenu();
 });
 
-export function startGame() {
+/** Decoded boot atlases, installed by create(); decoding is off the main thread (atlasData.ts). */
+const bootBitmaps = new Map<string, ImageBitmap>();
+let bootSeq = 0;
+
+export async function startGame() {
   if (gameStarted) return;
   gameStarted = true;
+  // The menu has usually decoded these already (boot.ts); a quit while waiting cancels the start.
+  const seq = ++bootSeq;
+  try {
+    const bmps = await Promise.all(BOOT_PACKS.map((p) => packBitmap(p)));
+    BOOT_PACKS.forEach((p, i) => bootBitmaps.set(p, bmps[i]));
+  } catch (e) {
+    if (seq !== bootSeq) return;
+    gameStarted = false;
+    window.dispatchEvent(new CustomEvent("hearth:quit", { detail: { error: `Could not load the game art (${(e as Error).message}).` } }));
+    return;
+  }
+  if (seq !== bootSeq || !gameStarted) return;
   // Restore whatever the previous quit hid; CSS supplies each element's real default
   // (flex for #btns, none for the panels/modals).
   for (const el of gameDomEls()) el.style.display = "";

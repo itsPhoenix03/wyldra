@@ -40,6 +40,8 @@ export interface FolkHost extends Phaser.Scene {
   px: number;
   py: number;
   z: number;
+  /** A folk member of this kind is in view: stream its clips in if they are not yet (src/atlas.ts). */
+  needHuman(kind: string): void;
 }
 
 const NAMES: Record<string, string> = {
@@ -229,6 +231,7 @@ export class FolkView {
       const p = s.isoE(x, y);
       let sp = this.spr.get(id);
       if (!sp) {
+        s.needHuman(kind);
         sp = s.add.sprite(p.x, p.y, kind).setOrigin(0.5, 0.92).setVisible(s.z === 0);
         sp.setData({ kind, act: "", view: "front", face: null, gvx: p.x, gvy: p.y, phase: Math.random() * 6, talkAt: -1e9, shoutAt: -1e9, chatAt: -1e9 });
         this.spr.set(id, sp);
@@ -248,6 +251,17 @@ export class FolkView {
         this.bubbles.delete(id);
         this.spr.delete(id);
       }
+  }
+
+  /**
+   * The clips of `kind` just streamed in: restart whatever each of them is doing,
+   * so one who has been standing in for a missing clip picks it up.
+   */
+  refreshKind(kind: string) {
+    for (const [id, sp] of this.spr) {
+      const act: string = sp.getData("act");
+      if (sp.getData("kind") === kind && act !== "hide") this.enter(id, sp, kind, act, act);
+    }
   }
 
   /**

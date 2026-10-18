@@ -268,9 +268,15 @@ const _HUMAN_SIZE: Record<string, [number, number]> = {
 };
 export const humanFrame = (char: string, action: string, i: number) =>
   `${char}_${action}_${String(i).padStart(2, '0')}`;
+// Every clip frame goes in its character's own atlas pack (see PACK_OF below).
+const _clipPack = new Map<string, string>();
 for (const [c, a, n] of HUMAN_CLIPS) {
   const [w, h] = _HUMAN_WIDE.has(`${c}_${a}`) ? [64, 48] : _HUMAN_SIZE[c];
-  for (let i = 1; i <= n; i++) { const k = humanFrame(c, a, i); _manifest.push([k, `/sprites/${k}.svg`, w, h]); }
+  for (let i = 1; i <= n; i++) {
+    const k = humanFrame(c, a, i);
+    _manifest.push([k, `/sprites/${k}.svg`, w, h]);
+    _clipPack.set(k, c);
+  }
 }
 
 // --- back and side standing poses of every human that moves (same canvas as the front art) ---
@@ -335,3 +341,27 @@ for (const [table, wild] of [[CRE_VIEWS, false], [ANI_VIEWS, true]] as const)
   }
 
 export const ASSET_MANIFEST: [string, string, number, number][] = _manifest;
+
+// --- atlas packs (tools/atlas/build-atlases.mjs bakes one PNG atlas per pack) ---
+// `base` is everything the world needs at boot, including every human's three
+// standing poses, so an NPC whose clips have not streamed in yet still stands
+// there in the right view. `keeper` is the player's whole frame set (the skin
+// atlases share its layout). Every other human's clips are their own pack,
+// streamed in per island (ZONE_PACKS) or on demand when one walks into view.
+export const KEEPER_PACK = 'keeper';
+const _keeperBase = new Set(['keeper', 'keeper_back', 'keeper_side']);
+export const PACK_OF = new Map<string, string>(
+  _manifest.map(([k]) => [k, _keeperBase.has(k) ? KEEPER_PACK : _clipPack.get(k) ?? 'base']),
+);
+/** The clip pack of a human character, or null if it has none (it is in `base` or not human). */
+export const humanPack = (char: string): string | null =>
+  char !== KEEPER_PACK && HUMAN_CLIPS.some(([c]) => c === char) ? char : null;
+
+/** Island -> the human clip packs its people (folk villages, medic) need. Core has none. */
+export const ZONE_PACKS: Record<string, string[]> = {
+  woods: ['villager', 'villager2', 'elder_woods', 'woods_child', 'medic'],
+  dunes: ['villager', 'villager2', 'shaman', 'ashmark_hunter'],
+  marsh: ['villager', 'villager2', 'elder_yvenne', 'tribal'],
+  spire: ['elder_spire', 'villager_snow', 'medic_snow'],
+  core: [],
+};
