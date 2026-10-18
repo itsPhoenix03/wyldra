@@ -187,6 +187,11 @@ _manifest.push(
   ['folk_hut',       '/sprites/folk_hut.svg',       96, 88],
   ['folk_hut_dunes', '/sprites/folk_hut_dunes.svg', 96, 88],
   ['folk_hut_marsh', '/sprites/folk_hut_marsh.svg', 96, 88],
+  ['folk_hut_spire', '/sprites/folk_hut_spire.svg', 96, 88],
+  // village folk recoloured from the villagers (tools/art/folk-variants.mjs)
+  ['elder_woods',   '/sprites/elder_woods.svg',   32, 48],
+  ['villager_snow', '/sprites/villager_snow.svg', 32, 48],
+  ['elder_spire',   '/sprites/elder_spire.svg',   32, 48],
 );
 
 const _BM: [string, number, number][] = [
@@ -228,16 +233,23 @@ export const HUMAN_CLIPS: [string, string, number][] = [
   ['villager', 'back_walk', 9], ['villager', 'side_walk', 9],
   ['villager2', 'walk', 9], ['villager2', 'collect', 9], ['villager2', 'craft', 9], ['villager2', 'sit', 7],
   ['villager2', 'back_walk', 9], ['villager2', 'side_walk', 9],
+  // village folk recoloured from the villagers keep their clips (tools/art/folk-variants.mjs)
+  ...['elder_woods', 'villager_snow'].flatMap((c): [string, string, number][] => [
+    [c, 'walk', 9], [c, 'collect', 9], [c, 'build', 9], [c, 'sit', 7], [c, 'back_walk', 9], [c, 'side_walk', 9]]),
+  ['elder_spire', 'walk', 9], ['elder_spire', 'collect', 9], ['elder_spire', 'craft', 9], ['elder_spire', 'sit', 7],
+  ['elder_spire', 'back_walk', 9], ['elder_spire', 'side_walk', 9],
   // walks for the folk the pack never animated (tools/art/human-views.mjs)
-  ...['woods_child', 'ashmark_hunter', 'elder_yvenne'].flatMap((c): [string, string, number][] =>
-    [[c, 'walk', 8], [c, 'back_walk', 8], [c, 'side_walk', 8]]),
+  // and their sit / collect (front: tools/art/folk-front-clips.mjs; back and side: npc-view-actions.mjs)
+  ...['woods_child', 'ashmark_hunter', 'elder_yvenne', 'shaman', 'tribal'].flatMap((c): [string, string, number][] =>
+    [[c, 'walk', 8], [c, 'back_walk', 8], [c, 'side_walk', 8], [c, 'sit', 7], [c, 'collect', 9]]),
   ['medic', 'walk', 9], ['medic', 'heal', 9], ['medic', 'prepare', 9],
   ['medic_snow', 'walk', 9], ['medic_snow', 'heal', 9], ['medic_snow', 'prepare', 9], ['medic_snow', 'shiver', 9],
 ];
 // swings that reach past the 32px body canvas: 64×48, body still centred
 // every keeper and NPC clip again from behind and in profile (tools/art/keeper-view-actions.mjs,
 // npc-view-actions.mjs); the walks have theirs above, and the medics never walk
-const _VIEW_CAST = new Set(['keeper', 'villager', 'villager2', 'medic', 'medic_snow']);
+const _VIEW_CAST = new Set(['keeper', 'villager', 'villager2', 'medic', 'medic_snow', 'elder_woods', 'villager_snow', 'elder_spire',
+  'woods_child', 'ashmark_hunter', 'elder_yvenne', 'shaman', 'tribal']);
 for (const [c, a, n] of HUMAN_CLIPS.filter(([c, a]) => _VIEW_CAST.has(c) && !a.endsWith('walk')))
   HUMAN_CLIPS.push([c, `back_${a}`, n], [c, `side_${a}`, n]);
 const _HUMAN_WIDE = new Set([
@@ -245,21 +257,32 @@ const _HUMAN_WIDE = new Set([
   ...['slash', 'islash', 'punch', 'chop', 'mine', 'spick', 'row', 'build'].flatMap((a) => [`keeper_back_${a}`, `keeper_side_${a}`]),
   'villager_side_build', 'villager_back_build', 'villager2_side_craft', 'villager2_back_craft',
   'medic_side_heal', 'medic_snow_side_heal',
+  'elder_woods_side_build', 'elder_woods_back_build', 'villager_snow_side_build', 'villager_snow_back_build',
+  'elder_spire_side_craft', 'elder_spire_back_craft',
 ]);
 const _HUMAN_SIZE: Record<string, [number, number]> = {
   keeper: [32, 48], villager: [32, 48], villager2: [32, 48], medic: [32, 48], medic_snow: [32, 48],   // adults share the keeper's scale
+  elder_woods: [32, 48], villager_snow: [32, 48], elder_spire: [32, 48],
   woods_child: [30, 42], ashmark_hunter: [32, 48], elder_yvenne: [32, 48],                       // as their base art loads
+  shaman: [36, 52], tribal: [36, 50],
 };
 export const humanFrame = (char: string, action: string, i: number) =>
   `${char}_${action}_${String(i).padStart(2, '0')}`;
+// Every clip frame goes in its character's own atlas pack (see PACK_OF below).
+const _clipPack = new Map<string, string>();
 for (const [c, a, n] of HUMAN_CLIPS) {
   const [w, h] = _HUMAN_WIDE.has(`${c}_${a}`) ? [64, 48] : _HUMAN_SIZE[c];
-  for (let i = 1; i <= n; i++) { const k = humanFrame(c, a, i); _manifest.push([k, `/sprites/${k}.svg`, w, h]); }
+  for (let i = 1; i <= n; i++) {
+    const k = humanFrame(c, a, i);
+    _manifest.push([k, `/sprites/${k}.svg`, w, h]);
+    _clipPack.set(k, c);
+  }
 }
 
 // --- back and side standing poses of every human that moves (same canvas as the front art) ---
 const _human = (k: string) => _manifest.find((e) => e[0] === k)!;
-for (const c of ['keeper', 'villager', 'villager2', 'woods_child', 'ashmark_hunter', 'elder_yvenne', 'medic', 'medic_snow'])
+for (const c of ['keeper', 'villager', 'villager2', 'woods_child', 'ashmark_hunter', 'elder_yvenne', 'medic', 'medic_snow',
+  'elder_woods', 'villager_snow', 'elder_spire', 'shaman', 'tribal'])
   for (const v of ['back', 'side']) { const [, , w, h] = _human(c); _manifest.push([`${c}_${v}`, `/sprites/${c}_${v}.svg`, w, h]); }
 
 // --- pickup pop effects: `<res>_pop_01..05`, 32×40, shared ground contact at y=36 ---
@@ -318,3 +341,27 @@ for (const [table, wild] of [[CRE_VIEWS, false], [ANI_VIEWS, true]] as const)
   }
 
 export const ASSET_MANIFEST: [string, string, number, number][] = _manifest;
+
+// --- atlas packs (tools/atlas/build-atlases.mjs bakes one PNG atlas per pack) ---
+// `base` is everything the world needs at boot, including every human's three
+// standing poses, so an NPC whose clips have not streamed in yet still stands
+// there in the right view. `keeper` is the player's whole frame set (the skin
+// atlases share its layout). Every other human's clips are their own pack,
+// streamed in per island (ZONE_PACKS) or on demand when one walks into view.
+export const KEEPER_PACK = 'keeper';
+const _keeperBase = new Set(['keeper', 'keeper_back', 'keeper_side']);
+export const PACK_OF = new Map<string, string>(
+  _manifest.map(([k]) => [k, _keeperBase.has(k) ? KEEPER_PACK : _clipPack.get(k) ?? 'base']),
+);
+/** The clip pack of a human character, or null if it has none (it is in `base` or not human). */
+export const humanPack = (char: string): string | null =>
+  char !== KEEPER_PACK && HUMAN_CLIPS.some(([c]) => c === char) ? char : null;
+
+/** Island -> the human clip packs its people (folk villages, medic) need. Core has none. */
+export const ZONE_PACKS: Record<string, string[]> = {
+  woods: ['villager', 'villager2', 'elder_woods', 'woods_child', 'medic'],
+  dunes: ['villager', 'villager2', 'shaman', 'ashmark_hunter'],
+  marsh: ['villager', 'villager2', 'elder_yvenne', 'tribal'],
+  spire: ['elder_spire', 'villager_snow', 'medic_snow'],
+  core: [],
+};

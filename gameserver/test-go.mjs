@@ -273,11 +273,16 @@ if (!sd) fail('workbench not demolished');
 if (A.state.inv.wood !== woodBefore + 4) fail(`refund wrong: ${woodBefore} -> ${A.state.inv.wood}`);
 console.log('demolition OK: refunded 4 wood, removal synced to B');
 
-// animals broadcast in sim tick — spawn is player-biased, so expect a population.
-// Assertions copied verbatim from the root test.mjs.
+// animals broadcast in sim tick. The Go server only sends what is within `r` tiles
+// of the player (docs/10 §9.2.1), so the world-wide count the root test.mjs asserts
+// is no longer visible on the wire — and how many happen to be near us is luck
+// (spawns favour a random player, under a world-wide cap of 20). The population
+// itself is room.TestAnimalSpawnCapCadenceAndBiome; here, the radius contract.
 const cre = A.msgs.filter((m) => m.t === 'cre').pop();
 if (!cre || !Array.isArray(cre.a)) fail('no animal data in sim broadcast');
-if (cre.a.length < 3) fail('too few animals spawned: ' + cre.a.length);
+if (!(cre.r > 0)) fail('cre frame carries no interest radius: ' + cre.r);
+const far = cre.a.filter((a) => Math.hypot(a[1] - px, a[2] - (py + 1)) > cre.r + 1);
+if (far.length) fail(`cre frame sent ${far.length} animals beyond r=${cre.r}`);
 console.log('animal sim OK (', cre.a.length, 'animals roaming:', [...new Set(cre.a.map(a => a[3]))].join(','), ')');
 
 // --- mining flow: gather materials, rebuild workbench, craft pick + mine entrance, descend, dig ---
@@ -434,11 +439,26 @@ console.log('E3 wear toggle off OK: wornGear =', wearInv2.wornGear);
 // (the same technique G5 uses) within a bounded budget and then fails. There is deliberately
 // no "no chit arrived, skipping" path: a test that cannot fail asserts nothing.
 let e4chit = null, e4sawCre = false;
+// The cre frame only carries creatures within its radius of us (docs/10 §9.2.1), so go
+// looking. They spawn round the Core while under the population cap and walk out at the
+// nearest player, so when the cap is spent on ones heading for B they are strung along the
+// way from the Core to spawn: hop along that line until one is in range.
+const seekCreature = async (c) => {
+  const HOPS = 12;
+  for (let k = 0; k <= HOPS; k++) {
+    const t = k / HOPS;
+    warp(c, CORE[0] + 16 + (initA.x - CORE[0] - 16) * t, CORE[1] + (initA.y - CORE[1]) * t, 0);
+    await sleep(700);
+    if (c.msgs.filter((m) => m.t === 'cre').pop()?.c?.length) return true;
+  }
+  return false;
+};
+await seekCreature(A);
 const e4t0 = Date.now();
 while (!e4chit && Date.now() - e4t0 < 20000) {
   const latest = A.msgs.filter((m) => m.t === 'cre').pop();
   const cands = latest?.c || [];
-  if (!cands.length) { await sleep(300); continue; }
+  if (!cands.length) { await seekCreature(A); continue; }
   e4sawCre = true;
   for (const [cid, cx, cy] of cands) {
     A.msgs = A.msgs.filter((m) => m.t !== 'chit');
@@ -934,11 +954,12 @@ console.log('G4 miss OK: act fired with no chit');
 // unarmed hit (dmg 1) never one-shots a fresh spawn (every CRE_TYPES hp floor is 2), but the
 // very first candidate may be one E4 already damaged above — so retry across candidates/spawns.
 let g5chit = null, g5seq = 9004;
+await seekCreature(A);   // into range of one (see E4)
 const g5t0 = Date.now();
-while (!g5chit && Date.now() - g5t0 < 10000) {
+while (!g5chit && Date.now() - g5t0 < 20000) {
   const latest = A.msgs.filter((m) => m.t === 'cre').pop();
   const cand = latest?.c?.[0];
-  if (!cand) { await sleep(300); continue; }
+  if (!cand) { await seekCreature(A); continue; }
   const [cid, cx, cy] = cand;
   g5seq++;
   A.msgs = A.msgs.filter((m) => m.t !== 'chit' && m.t !== 'act');
@@ -1101,11 +1122,17 @@ const devSand = (() => {
     if (world.tiles[i] !== T.SAND) continue;
     if (x < 4 || y < 4 || x >= SIZE - 4 || y >= SIZE - 4) continue;
     if (Math.hypot(x - initD.x, y - initD.y) < 400) continue;
-    if (MONOLITHS.some(([mx, my]) => Math.hypot(mx - x, my - y) < 15)) continue;
+    // 30, not 15: the island-centre monolith is also where the village and its huts stand
+    if (MONOLITHS.some(([mx, my]) => Math.hypot(mx - x, my - y) < 30)) continue;
     if (Math.hypot(CORE[0] - x, CORE[1] - y) < 25) continue;
+    // open means open: sand AND no resource node. The MOD stage builds a wall next door, and a
+    // boulder there was answered modfail 'node' — the plain only ever had to be all sand.
     let ok = true;
     for (let dy = -2; dy <= 2 && ok; dy++)
-      for (let dx = -2; dx <= 2; dx++) if (world.tiles[(y + dy) * SIZE + (x + dx)] !== T.SAND) { ok = false; break; }
+      for (let dx = -2; dx <= 2; dx++) {
+        const j = (y + dy) * SIZE + (x + dx);
+        if (world.tiles[j] !== T.SAND || world.nodes.has(j)) { ok = false; break; }
+      }
     if (ok) return [x + 0.5, y + 0.5];
   }
   return null;
@@ -1158,12 +1185,17 @@ console.log('DEVOK time OK: the world clock follows devcmd time, day <-> night')
   console.log(`DEVOK tp OK: moved ${Math.round(Math.hypot(devSand[0] - initD.x, devSand[1] - initD.y))} tiles and streamed ${pushed} chunks`);
 }
 
-// A survival-tick window: returns every hp value the server reported during it. The survival
-// block runs every 25 ticks = 5 s, so 13 s covers at least two of them.
+// A survival-tick window: returns every hp value the survival tick reported during it. The
+// survival block runs every 25 ticks = 5 s, so 13 s covers at least two of them. The stage
+// runs at night, when creatures roam: they are cleared first, and a creature's hit is told
+// apart by the knockback angle its hp frame carries (environmental damage has none) — a
+// stalker finding the tester used to read as "damaged with no weather".
 const hpWindow = async (ms = 13000) => {
+  D.send({ t: 'devcmd', cmd: 'clearcre' });
+  await sleep(250);
   D.msgs = D.msgs.filter((m) => m.t !== 'hp' && m.t !== 'msg');
   await sleep(ms);
-  return D.msgs.filter((m) => m.t === 'hp').map((m) => m.hp);
+  return D.msgs.filter((m) => m.t === 'hp' && m.ang === undefined).map((m) => m.hp);
 };
 
 // devcmd `wx`: set it, and the survival tick must take the matching branch. The clock is at
@@ -1208,6 +1240,8 @@ const hpWindow = async (ms = 13000) => {
 
 // `dev` (F9 kit): every slot, and the vitals the storm just spent.
 {
+  D.send({ t: 'devcmd', cmd: 'clearcre' });   // night on the Dunes: nothing should land a hit
+  await sleep(250);
   D.msgs = D.msgs.filter((m) => !['inv', 'stat', 'msg', 'hp'].includes(m.t));
   D.send({ t: 'dev' });
   await sleep(600);
@@ -1224,11 +1258,15 @@ const hpWindow = async (ms = 13000) => {
   const kitStat = lastOf(D, 'stat');
   if (!kitStat || kitStat.hunger !== 10 || kitStat.thirst !== 10)
     fail('DEVOK: dev kit did not restore hunger/thirst: ' + JSON.stringify(kitStat));
-  // hp has no frame of its own in the kit handler; tp reports the current value.
+  // hp has no frame of its own in the kit handler; tp reports the current value. Anything
+  // that hurt the tester since the kit (a creature, or a storm the weather tick is free to
+  // roll after the clear above) sent an hp frame of its own, so only an unexplained
+  // shortfall is the kit's fault.
+  const hitSinceKit = D.msgs.some((m) => m.t === 'hp' && m.hp < MAX_HP);
   D.msgs = D.msgs.filter((m) => m.t !== 'hp');
   D.send({ t: 'devcmd', cmd: 'tp', x: devSand[0], y: devSand[1] });
   const kitHp = await D.wait('hp', 3000);
-  if (kitHp.hp !== MAX_HP) fail(`DEVOK: dev kit left hp at ${kitHp.hp}, want ${MAX_HP}`);
+  if (kitHp.hp !== MAX_HP && !hitSinceKit) fail(`DEVOK: dev kit left hp at ${kitHp.hp}, want ${MAX_HP}`);
   console.log('DEVOK dev kit OK: full inventory, all 5 tools, both cloaks, vitals restored');
 }
 
@@ -1243,11 +1281,19 @@ const hpWindow = async (ms = 13000) => {
   D.send({ t: 'devcmd', cmd: 'wx', kind: 'sandstorm' }); await sleep(300);
   let hps = await hpWindow(16000);
   // The storm still lands its chip, but godTick puts it back on the next tick, so hp can never
-  // walk down. Anything at or below MAX_HP - 2 means two hits accumulated.
-  if (hps.some((h) => h <= MAX_HP - 2))
+  // walk down: every value below full is followed by full again. (Not "never below MAX_HP - 2":
+  // a creature roaming the Dunes at night can land a hit in the same tick as the storm chip,
+  // and that is still healed on the next tick — which is the protection under test.)
+  const healed = hps.every((h, k) => h >= MAX_HP || k === hps.length - 1 || hps[k + 1] === MAX_HP);
+  if (!healed || hps.some((h) => h <= 0))
     fail(`DEVOK: god mode did not protect the player — hp walked down: ${hps}`);
-  if (hps.length && hps[hps.length - 1] !== MAX_HP)
-    fail(`DEVOK: god mode left hp at ${hps[hps.length - 1]}, want ${MAX_HP}`);
+  if (hps.length && hps[hps.length - 1] !== MAX_HP) {
+    // the window can close between a chip and the next tick's heal (200 ms): give it that tick
+    await sleep(500);
+    const after = D.msgs.filter((m) => m.t === 'hp' && m.ang === undefined).map((m) => m.hp);
+    if (after[after.length - 1] !== MAX_HP)
+      fail(`DEVOK: god mode left hp at ${after[after.length - 1]}, want ${MAX_HP}`);
+  }
   D.msgs = D.msgs.filter((m) => m.t !== 'msg');
   D.send({ t: 'devcmd', cmd: 'god' }); await sleep(300);
   if (!D.msgs.some((m) => m.t === 'msg' && /God mode OFF/.test(m.s)))

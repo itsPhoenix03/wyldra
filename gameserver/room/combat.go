@@ -42,6 +42,7 @@ func (r *Room) hitAnimal(p *Player, a *Animal, dmg int, seq any) {
 		return
 	}
 	r.delAnimal(a.ID)
+	r.addHarm(p, a.X, a.Y, harmAnimal)
 	// meat by size, plus a 40% bonus cut
 	drop := animalTypes[a.Type].meat
 	if chance(0.4) {

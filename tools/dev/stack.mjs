@@ -12,7 +12,7 @@
 //   node tools/dev/stack.mjs --no-client   servers only (for test-go.mjs)
 //   node tools/dev/stack.mjs --legacy   the pre-migration Node server on :8081
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -118,7 +118,13 @@ if (legacy) {
   });
 }
 
-if (withClient) run('client', 'npx', ['vite', '--host']);
+// The client serves baked atlases (tools/atlas/build-atlases.mjs); rebuild them first if
+// any art changed. A no-op in well under a second when nothing did.
+if (withClient) {
+  const atlas = spawnSync(process.execPath, [resolve(ROOT, 'tools/atlas/build-atlases.mjs')], { cwd: ROOT, stdio: 'inherit' });
+  if (atlas.status !== 0) { process.stdout.write('[atlas] build failed — not starting the client\n'); shutdown(1); }
+  else run('client', 'npx', ['vite', '--host']);
+}
 
 process.stdout.write(
   `\n  stack: ${legacy ? 'legacy :8081' : 'control :8090 + game :8082'}` +

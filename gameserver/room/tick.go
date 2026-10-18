@@ -56,6 +56,7 @@ func (r *Room) onSimTick() {
 
 	// --- island folk: daily round, fleeing to their huts ---
 	r.folkTick()
+	r.harmFadeTick()
 
 	// --- environmental damage, hunger/thirst, campfire regen (every 5s) ---
 	if r.tickN%25 == 0 {
@@ -92,30 +93,61 @@ func (r *Room) onSimTick() {
 	r.broadcastCre()
 }
 
-// broadcastCre is the legacy per-tick `cre` frame: every creature and animal
-// position, plus the world clock the legacy server piggybacks on it. Both lists
-// are emitted in spawn order (creOrder / aniOrder) rather than map order, so a
-// client that diffs by array position sees a stable sequence.
+// InterestRadius is how far, in tiles, a player is told about creatures, animals
+// and folk in the per-tick `cre` frame (docs/10_GO_WIRE_PROTOCOL.md §6.1). The
+// view is ~22 tiles across, so this leaves a wide margin; everything farther is
+// left out, which keeps the frame small and the browser from parsing and
+// animating the whole world's population five times a second.
+const InterestRadius = 40.0
+
+// broadcastCre is the per-tick `cre` frame: every creature, animal and folk
+// position within InterestRadius of each player, plus the world clock the legacy
+// server piggybacks on it. Lists keep spawn order (creOrder / aniOrder) rather
+// than map order, so a client that diffs by array position sees a stable
+// sequence. A backlogged client is skipped: the next tick's frame replaces this one.
 func (r *Room) broadcastCre() {
 	if len(r.players) == 0 {
 		return
 	}
-	c := make([][]any, 0, len(r.creOrder))
+	type row struct {
+		x, y float64
+		w    []any
+	}
+	cre := make([]row, 0, len(r.creOrder))
 	for _, cr := range r.creOrder {
 		typ := cr.Type
 		if typ == "" {
 			typ = "crawler"
 		}
-		c = append(c, []any{cr.ID, toFixed(cr.X, 2), toFixed(cr.Y, 2), typ})
+		cre = append(cre, row{cr.X, cr.Y, []any{cr.ID, toFixed(cr.X, 2), toFixed(cr.Y, 2), typ}})
 	}
-	a := make([][]any, 0, len(r.aniOrder))
+	ani := make([]row, 0, len(r.aniOrder))
 	for _, an := range r.aniOrder {
-		a = append(a, []any{an.ID, toFixed(an.X, 2), toFixed(an.Y, 2), an.Type})
+		ani = append(ani, row{an.X, an.Y, []any{an.ID, toFixed(an.X, 2), toFixed(an.Y, 2), an.Type}})
 	}
-	r.broadcast(map[string]any{
-		"t": "cre", "c": c, "a": a, "f": r.folkWire(),
-		"time": toFixed(r.time, 4), "day": r.day,
-	})
+	folk := make([]row, 0, len(r.folk))
+	for _, w := range r.folkWire() {
+		folk = append(folk, row{w[1].(float64), w[2].(float64), w})
+	}
+	near := func(p *Player, rows []row) [][]any {
+		out := make([][]any, 0, len(rows))
+		for _, e := range rows {
+			if math.Hypot(e.x-p.X, e.y-p.Y) <= InterestRadius {
+				out = append(out, e.w)
+			}
+		}
+		return out
+	}
+	t, day := toFixed(r.time, 4), r.day
+	for _, p := range r.playerOrder {
+		if p.S.Backlogged() {
+			continue
+		}
+		r.send(p, map[string]any{
+			"t": "cre", "c": near(p, cre), "a": near(p, ani), "f": near(p, folk),
+			"time": t, "day": day, "r": InterestRadius,
+		})
+	}
 }
 
 // survivalTick is the legacy `tickN % 25` player block: hunger and thirst decay,
@@ -154,20 +186,30 @@ func (r *Room) survivalTick() {
 			q.ThermN = 0
 		}
 
+		// Taking the shelter a storm message tells you to take must actually
+		// protect you: the cases below are first-match, so a sheltered keeper used
+		// to fall through the storm case into plain heat / cold and take the same
+		// damage as an exposed one. Shelter from a storm covers its biome's
+		// exposure too (shade from the sun beside a wall, the fire's warmth).
+		sandStorm := r.weather.kind == "sandstorm" && tile == world.TSand
+		snowStorm := r.weather.kind == "snowstorm" && tile == world.TSnow
+		sandCover := sandStorm && r.sheltered(q, 2)
+		snowCover := snowStorm && r.nearStruct(q, "campfire", 6)
+
 		delta := 0
 		var msg string
 		switch {
 		case q.Z != 0:
 			// underground or indoors: sheltered from the weather
-		case r.weather.kind == "sandstorm" && tile == world.TSand && !r.nearAnyStruct(q, 2):
-			// any structure within 2 tiles counts as shelter from the sand
-			delta, msg = -1, "The sandstorm flays you — shelter beside a structure!"
-		case r.weather.kind == "snowstorm" && tile == world.TSnow && !r.nearStruct(q, "campfire", 6):
+		case sandStorm && !sandCover:
+			// a wall, a building, a hut within 2 tiles breaks the sand (sheltered)
+			delta, msg = -1, "The sandstorm flays you — shelter beside a wall or a hut!"
+		case snowStorm && !snowCover:
 			// only a campfire keeps the blizzard off, and it reaches 6 tiles
 			delta, msg = -1, "The blizzard freezes you — get to a campfire!"
-		case tile == world.TSand && !r.isNight() && q.Worn != "heatcloak":
+		case tile == world.TSand && !r.isNight() && q.Worn != "heatcloak" && !sandCover:
 			delta, msg = -1, "The desert heat sears you! Craft a Heat Cloak."
-		case tile == world.TSnow && q.Worn != "furcloak":
+		case tile == world.TSnow && q.Worn != "furcloak" && !snowCover:
 			delta, msg = -1, "The glacial cold bites! Craft a Fur Cloak."
 		case q.Hunger <= 0 || q.Thirst <= 0:
 			delta = -1

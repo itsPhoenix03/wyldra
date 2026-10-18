@@ -210,6 +210,17 @@ server-authoritative movement work:
   endpoints — plus a 500 ms cooldown
 - rejection → `{ t:'fix', x, y, z, b }`, throttled to one per 250 ms per player
 - every server-side reposition opens a 1 s grace window suppressing the distance check
+- a step that stays inside the tile the player already stands in is never collision-blocked
+  (`withinTile`): it enters nothing, and refusing it walled in a keeper who surfaced on the
+  mineshaft's own tile. The client also never surfaces there now (`surfaceExit`: the open tile
+  nearest the shaft).
+- **fall damage**: going over a **ledge** of 2+ elevation levels costs `drop − 1` hp. The drop is
+  measured tile edge by tile edge along the step (`fallDrop`), taking the gentler of the two
+  axis-by-axis routes, not between the step's two end tiles: a ~0.4-tile update can cross two
+  edges at once, and a diagonal down a 1-level staircase (3 → 2 → 1) used to read as a fall.
+  Landing in water never hurts. The client draws a worn, crumbling **ledge lip** (earth-toned shadow, broken brink, pebbles) on every tile edge that is
+  such a drop (`makeLipTextures` / `lipsAt`) — including the back edges the iso view has no
+  cliff face for.
 
 Porting this faithfully is mandatory; it is the security boundary for all other handlers,
 since every range check anchors on `p.x/p.y`.
@@ -340,7 +351,7 @@ enumerated in one place.
 ### 9.1 Client → server
 
 No new message types. `atk` gains its creature/animal half: the handler now scans creatures
-and then animals for the nearest target within **2.4** tiles and only falls through to
+and then animals for the nearest target within **1.5** tiles (`AtkReach`; the legacy server's 2.4 reached too far) and only falls through to
 structure demolition when it finds none.
 
 - `act.targetI` carries the struck creature or animal id (e.g. `"c12"`, `"a3"`), or `null` on
@@ -349,7 +360,7 @@ structure demolition when it finds none.
 
 ### 9.2 `cre` — the per-tick world frame
 
-Broadcast once per tick whenever at least one player is connected:
+Sent once per tick to each player whenever at least one player is connected:
 
 ```jsonc
 {
@@ -357,12 +368,27 @@ Broadcast once per tick whenever at least one player is connected:
   "c": [ ["c12", 640.25, 641.00, "crawler"] ],   // id, x, y, type
   "a": [ ["a3", 182.50, 179.75, "deer"] ],       // id, x, y, species
   "f": [ ["camp-woods-0", 174.12, 188.40, "villager", "walk"] ], // §13 — id, x, y, kind, act
-  "time": 0.3141, "day": 2
+  "time": 0.3141, "day": 2,
+  "r": 40                                        // §9.2.1 interest radius, tiles
 }
 ```
 
 Positions are rounded to 2 decimal places and the clock to 4, matching the legacy
 `+v.toFixed(n)`. Both arrays are emitted in **spawn order**, not map order (see §9.6).
+
+#### 9.2.1 Interest radius and backlog
+
+Each player's frame carries only the creatures, animals and folk within `r` tiles
+(Euclidean, `room.InterestRadius` = 40) of that player's position; the view is about 22
+tiles across. Something that leaves the frame while near the edge of `r` walked out of
+range — the client removes it silently and plays a death only for things that vanish
+well inside it (`src/main.ts`, `outOfRange`). The legacy server sends everything and no `r`.
+
+`cre` is a snapshot the next tick supersedes, so a player whose outbound queue is at
+least half full (`Session.Backlogged`) is **skipped** for that tick rather than queued
+another frame. A browser that stalls briefly (a long frame, a tab switch) therefore
+catches up instead of overflowing its queue and being dropped (`dropSlow`). Every other
+frame type is still always queued.
 
 Creature types: `crawler`, `stalker`, `brute`, `wisp`, `husk_wolf`, `bog_shambler`,
 `frost_wraith`, `drowned`, `blight_lancer`.
@@ -392,9 +418,18 @@ Weather is a single global state, not per-region. A front starts with probabilit
 biome is who it hurts:
 
 - `rain` (Woods / Marsh) — cosmetic on the server; the client draws it.
-- `sandstorm` (Dunes) — 1 hp per 5 s on `SAND` unless *any* structure is within 2 tiles.
+- `sandstorm` (Dunes) — 1 hp per 5 s on `SAND` unless **shelter** is within 2 tiles
+  (`Room.sheltered`): a blocking structure, a modular `wall` or `fixture` (pillar, door), a
+  village hut or a medic's hut. Open decor (`DECOR_NONBLOCKING`: rugs, lanterns, banners…),
+  farmplots and modular floors are not shelter.
 - `snowstorm` (Spire) — 1 hp per 5 s on `SNOW` unless a **campfire** is within 6 tiles. A fur
   cloak does not help; that is what separates a blizzard from ordinary cold.
+
+**Shelter covers the biome's exposure too.** While a storm blows, a keeper sheltered from it
+takes no desert heat (shade beside the wall) or glacial cold (the fire's warmth) either. The
+survival cases are first-match, and a sheltered keeper used to fall through the storm case into
+plain heat / cold — losing the same 1 hp per 5 s as one standing in the open. With no storm,
+heat and cold are back to needing the cloaks.
 
 Being underground (`z != 0`) shelters from all of it. "Blizzard" is the client's
 name for `snowstorm`, and ambient snowfall is a permanent client-side particle layer in the
@@ -966,13 +1001,16 @@ Each camp has a fixed roster (Woods: `villager`, `villager2`, `woods_child`;
 Dunes: `ashmark_hunter`, `villager2`; Marsh: `elder_yvenne`, `villager`). Folk are
 server-simulated, cannot be attacked, and ride every `cre` frame as
 `f: [id, x, y, kind, act]` (positions are tile-centre floats, 2 dp). `act` is one
-of `idle`, `walk`, `run`, `talk`, `sit`, `collect`, `build`, `craft`, `hide`:
+of `idle`, `walk`, `run`, `shun`, `shelter`, `talk`, `scold`, `sit`, `collect`, `build`, `craft`, `hide`
+(and the routine acts of §13.3; `shun` and `scold` are §13.4, `shelter` §13.5):
 
 - By day they wander the yard, work, sit at the fire, and stop and `talk` to a
   surface player within 2.4 tiles. What they say is client-side flavour.
-- A creature within 7 tiles sends them running (`run`) to the hut door; inside
-  they are `hide` and invisible to creatures. They come back out once nothing is
-  within 10 tiles for 15 ticks.
+- A creature within 7 tiles of them, **or within 14 tiles of their village's fire**,
+  sends them running (`run`) to the hut door; inside they are `hide` and invisible
+  to creatures. They come back out once nothing is within 10 tiles of them and
+  nothing within 18 of the fire, for 15 ticks. The fire rule is the village alarm:
+  without it, folk on the far side of the village sat on while their neighbours fled.
 - At night everyone but the camp's watcher (the hunter, the elder) turns in
   (`hide`); the watcher sits by the fire until something comes for it.
 
@@ -1011,3 +1049,30 @@ The Slice 3 rules (§9) still pick targets, ranges and damage. Layered on top:
 - **Idle.** With no prey, crawlers, stalkers, wolves and drowned chase folk within
   12 tiles (folk are never damaged). Every other idle creature ambles near home
   at 40% speed. Searching, folk-chasing and ambling creatures never gnaw.
+
+### 13.4 Village regard — the folk remember harm
+
+`gameserver/room/folk_regard.go`. Each island's folk keep a per-keeper (by `userId`)
+tally of harm done to their island: **1** per tree felled, **+4** when that felling
+blights the ground (`chopEcosystem` turned grass to mud), **2** per animal killed.
+It is capped at 30, forgiven at 1 per 20 s, and not saved.
+
+| Tally | Standing | What the folk do |
+|---|---|---|
+| < 6 | welcome | `talk` as before |
+| ≥ 6 | wary | within 6 tiles they `scold` instead of talking: `face` points at the keeper |
+| ≥ 14 | hostile | villagers and children `shun` (run for the hut, then `hide`) within 6 tiles and stay in while the keeper is within 9; watchers stand and `scold` |
+
+Folk who see the harm done (within 12 tiles) `scold` that keeper for 12 ticks
+whatever the tally. A change of standing reaches the keeper as a `msg`. Lines are
+client-side flavour (`src/folk.ts` `SCOLDS`, `SHUN_SHOUTS`).
+
+### 13.5 Folk and the weather
+
+`gameserver/room/folk_weather.go`. The folk of the island the weather bites react the moment it
+starts: a `sandstorm` sends the whole Dunes village in and a `snowstorm` the whole Spire, watchers
+included; `rain` calls the Woods and Marsh children in while the adults carry on. While heading
+in they are `shelter` (the same run as `run`; the client shouts about the storm rather than the
+blight), then `hide` until it passes — then out again after the usual all-clear. Folk on other
+islands carry on. On every `wx`, up to two folk in earshot remark on it client-side
+(`src/folk.ts` `onWeather`).

@@ -385,21 +385,29 @@ func TestAtkRefusedOffSurface(t *testing.T) {
 	}
 }
 
-// A creature just beyond 2.4 tiles is out of reach, and the swing falls through
-// to the structure-demolition branch instead.
-func TestAtkReachIs24Tiles(t *testing.T) {
+// A creature just beyond AtkReach is out of reach, and the swing falls through
+// to the structure-demolition branch instead; one just inside it is hit.
+func TestAtkReach(t *testing.T) {
 	f := newFixture(t)
 	gx, gy := landTile(t, f.r.world, world.TGrass)
 	f.stand(gx, gy, 0)
-	c := f.spawnAt("crawler", gx+2.5, gy, false)
+	c := f.spawnAt("crawler", gx+AtkReach+0.1, gy, false)
 	hp := c.HP
 	f.reset()
 	f.r.handleAtk(f.p, map[string]any{"t": "atk"})
 	if c.HP != hp {
-		t.Fatal("a creature 2.5 tiles away was hit; the reach is 2.4")
+		t.Fatalf("a creature %.1f tiles away was hit; the reach is %.1f", AtkReach+0.1, AtkReach)
 	}
 	if act := f.lastOfType("act"); act == nil || act["targetI"] != nil {
 		t.Fatalf("act.targetI = %v on a miss, want null", act["targetI"])
+	}
+
+	c.X = gx + AtkReach - 0.1
+	f.now += 1000 // past the 400ms swing cooldown
+	f.reset()
+	f.r.handleAtk(f.p, map[string]any{"t": "atk"})
+	if c.HP == hp {
+		t.Fatalf("a creature %.1f tiles away was not hit; the reach is %.1f", AtkReach-0.1, AtkReach)
 	}
 }
 
@@ -670,7 +678,7 @@ func TestSandstormDamageAndShelter(t *testing.T) {
 	if f.p.HP != 9 {
 		t.Fatalf("sandstorm left hp %d, want 9", f.p.HP)
 	}
-	if m := f.lastOfType("msg"); m == nil || m["s"] != "The sandstorm flays you — shelter beside a structure!" {
+	if m := f.lastOfType("msg"); m == nil || m["s"] != "The sandstorm flays you — shelter beside a wall or a hut!" {
 		t.Fatalf("expected the sandstorm message, got %v", m)
 	}
 
@@ -680,6 +688,47 @@ func TestSandstormDamageAndShelter(t *testing.T) {
 	f.r.survivalTick()
 	if f.p.HP != 10 {
 		t.Fatalf("a structure 2 tiles away did not shelter from the sandstorm: hp %d", f.p.HP)
+	}
+}
+
+// Shelter has to work for the keeper who takes it: by day with no heat cloak a
+// sheltered keeper used to fall through the storm case into desert heat and
+// lose the same hp as an exposed one. And a modular wall is shelter, a lantern is not.
+func TestSandstormShelterIsReal(t *testing.T) {
+	f := newFixture(t)
+	sx, sy := landTile(t, f.r.world, world.TSand)
+	f.p.X, f.p.Y, f.p.Z = sx, sy, 0
+	f.p.Worn = ""  // no heat cloak
+	f.r.time = 0.3 // day: the desert heat is live
+	f.r.weather.kind = "sandstorm"
+	f.r.weather.until = f.now + 60000
+	hp := func() int {
+		f.p.HP, f.p.Hunger, f.p.Thirst = 10, 10, 10
+		f.r.survivalTick()
+		return f.p.HP
+	}
+
+	f.r.structures[ti(sx+1, sy)] = &Structure{Kind: "lantern", HP: 5, Lvl: 1}
+	if !f.r.defs.DecorNonBlk["lantern"] {
+		t.Fatal("lantern is no longer non-blocking decor; pick another open decor piece")
+	}
+	if got := hp(); got != 9 {
+		t.Fatalf("a lantern counted as shelter from the sandstorm: hp %d, want 9", got)
+	}
+	delete(f.r.structures, ti(sx+1, sy))
+
+	i := ti(sx+1, sy)
+	k := modKey(i, "wall")
+	f.r.modules[k] = &Module{I: i, Slot: "wall", Kind: "mod_wall_stone", HP: 40}
+	f.r.modOrder = append(f.r.modOrder, k)
+	if got := hp(); got != 10 {
+		t.Fatalf("a keeper sheltering by a modular wall, by day without a heat cloak, lost hp: %d", got)
+	}
+
+	// the storm passes: plain desert heat is back, shelter or not (shade is a storm rule)
+	f.r.weather.kind = ""
+	if got := hp(); got != 9 {
+		t.Fatalf("with no storm, the desert heat should sear a keeper without a cloak: hp %d", got)
 	}
 }
 

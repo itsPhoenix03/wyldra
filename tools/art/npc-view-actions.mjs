@@ -208,12 +208,24 @@ const CAST = {
   villager2: ['collect', 'craft', 'sit'],
   medic: ['heal', 'prepare'],
   medic_snow: ['heal', 'prepare', 'shiver'],
+  // village folk recoloured from the villagers (tools/art/folk-variants.mjs) do the same work
+  elder_woods: ['collect', 'build', 'sit'],
+  villager_snow: ['collect', 'build', 'sit'],
+  elder_spire: ['collect', 'craft', 'sit'],
+  // the folk drawn standing only: their front sit / collect are tools/art/folk-front-clips.mjs
+  woods_child: ['collect', 'sit'],
+  ashmark_hunter: ['collect', 'sit'],
+  elder_yvenne: ['collect', 'sit'],
+  shaman: ['collect', 'sit'],
+  tribal: ['collect', 'sit'],
 };
 // clips that reach past the 32px body canvas (a 64×48 canvas, body still centred)
 // (src/assets.ts lists the same keys)
 const WIDE = new Set([
   'villager_side_build', 'villager_back_build', 'villager2_side_craft', 'villager2_back_craft',
   'medic_side_heal', 'medic_snow_side_heal',
+  'elder_woods_side_build', 'elder_woods_back_build', 'villager_snow_side_build', 'villager_snow_back_build',
+  'elder_spire_side_craft', 'elder_spire_back_craft',
 ]);
 const only = process.argv[2];
 for (const [name, clips] of Object.entries(CAST)) {

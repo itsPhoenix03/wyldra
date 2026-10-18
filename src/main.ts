@@ -29,11 +29,16 @@ import { GameAudio } from "./audio.ts";
 import { FolkView, type FolkHost } from "./folk.ts";
 import { creatureLookAt, sampleCreature, tickAnimalGait, tickCreatureGait, type LookTarget } from "./creatureGait.ts";
 import { getSetting } from "./settings.ts";
-import { ANI_VIEWS, ASSET_MANIFEST, HUMAN_CLIPS, NODE_SPR, POP_FRAME_MS, POP_RES, STRUCT_SPR, humanFrame } from "./assets.ts";
+import { ANI_VIEWS, HUMAN_CLIPS, KEEPER_PACK, NODE_SPR, POP_FRAME_MS, POP_RES, STRUCT_SPR, ZONE_PACKS, humanFrame, humanPack } from "./assets.ts";
+import { BOOT_PACKS, packBitmap } from "./atlasData.ts";
+import { PackLoader } from "./atlas.ts";
+import { zonesNear } from "./zones.ts";
+import { DevOverlay } from "./devOverlay.ts";
+import { KeeperVoice } from "./keeperVoice.ts";
 import { pickView, viewKey, type View } from "./facing.ts";
 import { ROTATABLE_MODS, facing, facingCount } from "./rotation.ts";
 import { TileStore, UNLOADED, CHUNK, type ChunkMsg } from "./tiles.ts";
-import { LEGACY, LEGACY_WS_PORT, requestJoin, identityToken } from "./net.ts";
+import { LEGACY, LEGACY_WS_PORT, takeJoin, identityToken } from "./net.ts";
 
 const TW = 64,
   TH = 32;
@@ -399,22 +404,31 @@ class Hearth extends Phaser.Scene {
     };
   }
 
-  preload() {
-    for (const [k, u, w, h] of ASSET_MANIFEST)
-      this.load.svg(k, u, { width: w, height: h });
-  }
+  // Atlas packs (src/atlas.ts): the boot packs are decoded before the game exists
+  // (startGame) and installed first thing in create(); each island's folk clips
+  // stream in as the player commits to it (streamZones) or a folk member walks
+  // into view (needHuman). Nothing is loaded through Phaser's loader any more.
+  packs!: PackLoader;
+  private zoneCheckAt = 0;
+  dev!: DevOverlay;
+  voice!: KeeperVoice; // the keeper's own speech bubble (src/keeperVoice.ts)
+  private ledgeCheckAt = 0;
 
   create() {
     activeScene = this;
+    this.packs = new PackLoader(this.textures, () => !this.quitting && !!this.sys.game, (p) => this.onPackInstalled(p));
+    for (const p of BOOT_PACKS) this.packs.installNow(p, bootBitmaps.get(p)!);
     // dev server only (stripped from production builds): lets tools/media/capture.mjs
     // drive a scripted session for the README clips
     if ((import.meta as any).env?.DEV) (window as any).__hearth = this;
     this.quitting = false;
     this.makeWeatherFx();
     this.makeGlowTextures();
+    this.makeLipTextures();
     this.registerBirdAnims();
-    this.registerHumanAnims();
     this.registerPopAnims();
+    this.dev = new DevOverlay(this);
+    this.voice = new KeeperVoice(this);
     // Task 5: player display name
     const urlName = new URLSearchParams(location.search).get("name");
     if (urlName) {
@@ -596,12 +610,22 @@ class Hearth extends Phaser.Scene {
       `<button data-cmd="god">🛡 God toggle</button>` +
       `<button data-cmd="kill">💀 Kill</button>` +
       `<button data-cmd="kit">🎁 Full kit</button></div>` +
+      `<div style="color:#9ab;margin:6px 0 4px">Debug view</div>` +
+      `<label style="cursor:pointer"><input type="checkbox" id="devRanges"> Combat ranges + motion lines</label>` +
+      `<div style="color:#789;font-size:11px;line-height:1.5;margin-top:3px">` +
+      `<span style="color:#5fd4ff">■</span> you: swing reach 1.5, line to target<br>` +
+      `<span style="color:#9be37a">■</span> other players: swing reach<br>` +
+      `<span style="color:#ff5a4a">■</span> enemy contact 1.1 · <span style="color:#ffa040">■</span> ranged band<br>` +
+      `<span style="color:#c08cff">■</span> wraith dart range · arrows: next 1s of motion</div>` +
       `</div>` +
       `<style>#devPanel button{background:#2a3a4a;color:#fff;border:1px solid #57a;border-radius:4px;` +
       `margin:2px;padding:3px 7px;cursor:pointer;font:12px monospace}#devPanel button:hover{background:#3a5a4a}` +
       `#devSpawnSel{width:100%;background:#1a222c;color:#fff;border:1px solid #57a;border-radius:4px;` +
       `font:12px monospace;padding:3px}</style>`;
     document.body.appendChild(d);
+    const ranges = document.getElementById("devRanges") as HTMLInputElement;
+    ranges.checked = this.dev.rangesOn;
+    ranges.addEventListener("change", () => this.dev.setRanges(ranges.checked));
     d.addEventListener("click", (e) => {
       const b = (e.target as HTMLElement).closest("button") as HTMLButtonElement | null;
       if (!b || !this.devEnabled) return;
@@ -637,7 +661,7 @@ class Hearth extends Phaser.Scene {
    * (docs/10_GO_WIRE_PROTOCOL.md §1). Identity comes from the ticket, never from us.
    */
   private connectViaControlPlane() {
-    requestJoin(this.myName)
+    takeJoin(this.myName)
       .then((j) => {
         if (this.quitting || !this.scene.isActive()) return;
         if (j.name) this.myName = j.name;
@@ -674,6 +698,7 @@ class Hearth extends Phaser.Scene {
     this.ws.onopen = onOpen;
     this.ws.onmessage = (e) => {
       if (this.quitting) return;
+      this.dev.onNet(e.data.length);
       this.onMsg(JSON.parse(e.data));
     };
     this.ws.onclose = () => {
@@ -696,6 +721,61 @@ class Hearth extends Phaser.Scene {
   nextActSeq() {
     this.pendingActSeq = ++this.actionSeq;
     return this.pendingActSeq;
+  }
+
+  /**
+   * Ledge lips: one small texture per edge of a tile's top diamond, drawn where the
+   * ground beyond that edge is dry land 2+ levels lower — exactly where the server's
+   * fall damage applies (handlePos / fallDrop). The iso view only shows cliff faces
+   * that point at the camera, so a drop off the back of a tile looked like flat ground.
+   * Same 64x40 canvas as the tile art; the diamond is its top 32px.
+   */
+  makeLipTextures() {
+    const V = { n: [32, 0], e: [64, 16], s: [32, 32], w: [0, 16] } as const;
+    for (const [key, a, b] of [["ne", V.n, V.e], ["es", V.e, V.s], ["sw", V.s, V.w], ["wn", V.w, V.n]] as const) {
+      if (this.textures.exists(`lip-${key}`)) continue;
+      // Worn, crumbling ground rather than a marker: earth tones at low alpha so the
+      // biome shows through. The edge darkens toward the drop like ground falling away,
+      // a faint pale rim catches the light on the lip, and loose pebbles sit at the brink.
+      // n is the screen-space unit vector from the edge in toward the tile's centre.
+      const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+      const nl0 = Math.hypot(32 - mx, 16 - my), nx = (32 - mx) / nl0, ny = (16 - my) / nl0;
+      const at = (t: number, off: number): [number, number] => [a[0] + (b[0] - a[0]) * t + nx * off, a[1] + (b[1] - a[1]) * t + ny * off];
+      const g = this.make.graphics({}, false);
+      for (let k = 0; k < 6; k++) { // shadow fading in from the brink
+        const [x0, y0] = at(0.06, 0.8 + k), [x1, y1] = at(0.94, 0.8 + k);
+        g.lineStyle(1.4, 0x2b1d10, 0.4 * (1 - k / 6)).lineBetween(x0, y0, x1, y1);
+      }
+      // the broken brink: short uneven dark runs, not a ruled line
+      for (const [t0, t1] of [[0.07, 0.24], [0.28, 0.46], [0.5, 0.63], [0.67, 0.93]] as const) {
+        const [x0, y0] = at(t0, 0.5), [x1, y1] = at(t1, 0.5);
+        g.lineStyle(1.6, 0x3a2614, 0.55).lineBetween(x0, y0, x1, y1);
+      }
+      {
+        const [x0, y0] = at(0.1, 1.6), [x1, y1] = at(0.9, 1.6);
+        g.lineStyle(1, 0xf4e7c8, 0.4).lineBetween(x0, y0, x1, y1);
+      }
+      for (const [t, off, r] of [[0.16, 3.0, 1.2], [0.34, 4.2, 0.9], [0.5, 2.6, 1.3], [0.67, 3.9, 1], [0.85, 3.1, 1.1]] as const) {
+        const [px, py] = at(t, off);
+        g.fillStyle(0x4f3d2a, 0.7).fillCircle(px, py, r);
+        g.fillStyle(0xe9dcbc, 0.45).fillCircle(px - 0.35, py - 0.35, r * 0.45);
+      }
+      g.generateTexture(`lip-${key}`, 64, 40);
+      g.destroy();
+    }
+  }
+
+  /** The lip textures tile i needs: one per edge whose neighbour is dry land 2+ levels below. */
+  private lipsAt(x: number, y: number): string[] {
+    const e = this.world.elev[y * SIZE + x], out: string[] = [];
+    for (const [dx, dy, key] of [[0, -1, "lip-ne"], [1, 0, "lip-es"], [0, 1, "lip-sw"], [-1, 0, "lip-wn"]] as const) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE) continue;
+      const t = this.world.tiles[ny * SIZE + nx];
+      if (t === UNLOADED || t === T.WATER) continue; // unknown, or a splash (no damage)
+      if (e - this.world.elev[ny * SIZE + nx] >= 2) out.push(key);
+    }
+    return out;
   }
 
   makeGlowTextures() {
@@ -826,9 +906,10 @@ class Hearth extends Phaser.Scene {
     }
   }
 
-  /** `<char>_<action>` anims for NPC/medic sprites (the player rig samples frames itself). */
-  registerHumanAnims() {
+  /** `<char>_<action>` anims for NPC/medic sprites (the player rig samples frames itself), once `pack` is in. */
+  registerHumanAnims(pack: string) {
     for (const [c, a, n] of HUMAN_CLIPS) {
+      if (c !== pack || this.anims.exists(`${c}_${a}`)) continue;
       this.anims.create({
         key: `${c}_${a}`,
         frames: Array.from({ length: n }, (_, i) => ({ key: humanFrame(c, a, i + 1) })),
@@ -836,6 +917,46 @@ class Hearth extends Phaser.Scene {
         repeat: a.endsWith("walk") || a.endsWith("sit") ? -1 : 0,   // walk / sit, any view
       });
     }
+  }
+
+  private onPackInstalled(pack: string) {
+    this.registerHumanAnims(pack);
+    if (pack !== "base" && pack !== KEEPER_PACK) this.folk.refreshKind(pack);
+  }
+
+  /** FolkHost: the folk just spoke to or about the keeper — the keeper answers (keeperVoice.ts). */
+  keeperReply(topic: string, kind: string, afterMs?: number) {
+    this.voice.reply(topic, kind, afterMs);
+  }
+
+  /**
+   * The keeper stands within reach of a ledge lip on their own tile: the edge they
+   * would fall over. Lip edges map to neighbours as in lipsAt (ne: y-1, es: x+1,
+   * sw: y+1, wn: x-1); "within reach" is under half a tile from that edge.
+   */
+  private atLedge(): boolean {
+    const x = this.px | 0, y = this.py | 0, fx = this.px - x, fy = this.py - y;
+    for (const lip of this.lipsAt(x, y)) {
+      const d = lip === "lip-ne" ? fy : lip === "lip-es" ? 1 - fx : lip === "lip-sw" ? 1 - fy : fx;
+      if (d < 0.45) return true;
+    }
+    return false;
+  }
+
+  /** FolkHost: a folk member of `kind` is in view, so its clips are needed now. */
+  needHuman(kind: string) {
+    const p = humanPack(kind);
+    if (p) this.packs.ensure(p);
+  }
+
+  /**
+   * Stream the folk clips of the island the player is on or committed to (src/zones.ts).
+   * Twice a second is plenty: at boat speed that is 3 tiles, against ~110 tiles of lead.
+   */
+  private streamZones(t: number) {
+    if (t < this.zoneCheckAt) return;
+    this.zoneCheckAt = t + 500;
+    for (const z of zonesNear(this.px, this.py)) for (const p of ZONE_PACKS[z]) this.packs.ensure(p);
   }
 
   /** The Starmetal Armor turned (some of) a creature hit: a shield glint over the keeper. */
@@ -1083,6 +1204,9 @@ class Hearth extends Phaser.Scene {
         const e = Math.max(1, this.world.elev[i]);
         for (let l = 0; l < e; l++)
           rt.batchDraw(key, p.x - TW / 2 - rx, p.y - l * 10 - ry); // stacked skirts form cliffs
+        // ledge lips on the top face, in draw order so tiles in front still cover them
+        if (key !== "water" && !key.startsWith("water_"))
+          for (const lip of this.lipsAt(x, y)) rt.batchDraw(lip, p.x - TW / 2 - rx, p.y - (e - 1) * 10 - ry);
       }
     rt.endDraw();
     return rt;
@@ -1131,6 +1255,8 @@ class Hearth extends Phaser.Scene {
         const e = Math.max(1, this.world.elev[ii]);
         if (p.y - (e - 1) * 10 >= by + bh || p.y + TILE_H <= by) continue;
         for (let l = 0; l < e; l++) scratch.batchDraw(kk, left - bx, p.y - l * 10 - by);
+        if (kk !== "water" && !kk.startsWith("water_"))
+          for (const lip of this.lipsAt(tx, ty)) scratch.batchDraw(lip, left - bx, p.y - (e - 1) * 10 - by);
       }
     scratch.endDraw();
     for (const [k, rt] of this.chunks) {
@@ -1629,7 +1755,10 @@ class Hearth extends Phaser.Scene {
       // Task 4: wornGear from inv update
       this.wornGear = m.wornGear ?? null;
       this.armorOn = m.armor === true;
-    } else if (m.t === "msg") showMsg(m.s);
+    } else if (m.t === "msg") {
+      showMsg(m.s);
+      if (/fell hard/i.test(m.s)) this.voice.fell();
+    }
     else if (m.t === "medicOffer") {
       this.medicOffer = m.offer
         ? {
@@ -1729,10 +1858,11 @@ class Hearth extends Phaser.Scene {
       this.weather = m.kind;
       if (m.kind === "rain") showMsg("🌧 Rain sweeps across the lowlands.");
       else if (m.kind === "sandstorm")
-        showMsg("🌪 A SANDSTORM scours the Dunes — shelter beside structures!");
+        showMsg("🌪 A SANDSTORM scours the Dunes — shelter beside a wall or a hut!");
       else if (m.kind === "snowstorm")
         showMsg("❄ A BLIZZARD engulfs the Spire — reach a campfire!");
       else showMsg("The skies clear.");
+      this.folk.onWeather(m.kind ?? null, zonesNear(this.px, this.py)[0] ?? null);
     } else if (m.t === "build") {
       this.audio.build();
       this.addStruct(m.i, m.kind, m.hp, m.dir, m.lvl);
@@ -1863,7 +1993,12 @@ class Hearth extends Phaser.Scene {
           this.slowUntil = (this.slowUntil || 0) + m.slow;
         }
       }
-      if (m.hp === 10 && this.hp <= 1) {
+      // A respawn is full hp WITH the respawn point. A heal is not: the medic heals to full
+      // in one go and its frame (`healed`, `source`) has no position — taking it for a
+      // respawn from 1 hp set px/py to undefined, the camera to NaN, and the world to black.
+      const respawned =
+        m.hp === 10 && this.hp <= 1 && m.healed === undefined && Number.isFinite(m.x) && Number.isFinite(m.y);
+      if (respawned) {
         this.px = m.x;
         this.py = m.y;
         if (this.z === 1) this.setZ(0);
@@ -2046,8 +2181,17 @@ class Hearth extends Phaser.Scene {
         sampleCreature(s, x, y, this.time.now); // ground speed + facing, before cx/cy move on
         s.setData("tx", p.x).setData("ty", p.y).setData("cx", x).setData("cy", y);
       }
+      // The Go server sends only what is within `r` tiles of us (§ interest, docs/10).
+      // Something missing from the frame near that edge walked out of range rather
+      // than died: drop it quietly. The legacy server sends everything and no `r`.
+      const outOfRange = (s: Phaser.GameObjects.Sprite) =>
+        m.r > 0 && Math.hypot(s.getData("cx") - this.px, s.getData("cy") - this.py) > m.r - 3;
       for (const [cid, s] of this.creSpr)
-        if (!seen.has(cid)) {
+        if (!seen.has(cid) && outOfRange(s)) {
+          s.getData("jShadow")?.destroy();
+          s.destroy();
+          this.creSpr.delete(cid);
+        } else if (!seen.has(cid)) {
           // death tween: 120 ms scale→0.7, alpha→0, angle±20, then 4 particles (Guide §2.4)
           this.audio.killmob();
           // essence from a kill we were fighting pops out of the body
@@ -2105,7 +2249,7 @@ class Hearth extends Phaser.Scene {
       this.folk.sync(m.f);
       for (const [aid, s] of this.aniSpr)
         if (!aseen.has(aid)) {
-          if (this.me && Math.hypot(s.x - this.me.x, s.y - this.me.y) < 200)
+          if (this.me && !outOfRange(s) && Math.hypot(s.x - this.me.x, s.y - this.me.y) < 200)
             this.lastGainSrc = { x: s.x, y: s.y, at: this.time.now };   // meat from the hunt
           s.destroy();
           this.aniSpr.delete(aid);
@@ -2115,16 +2259,25 @@ class Hearth extends Phaser.Scene {
 
   // --- streamed chunk application (§4) ---------------------------------------------
 
-  /** Track a landmark sprite so it can be re-lifted when its tile's elevation arrives. */
+  /**
+   * Track a landmark sprite so it can be re-lifted when its tile's elevation arrives.
+   * Its depth moves with it: everything in the world sorts by the screen y of where it
+   * stands, elevation lift included — the player, creatures and folk do (update(), folk.ts),
+   * so a placed object sorted by its flat, unlifted y would draw over a keeper standing
+   * in front of it on high ground.
+   */
   private trackLift(spr: Phaser.GameObjects.Image, x: number, y: number) {
-    spr.setData("lx", x).setData("ly", y).setData("oy", spr.y - this.isoE(x, y).y);
+    const g = this.isoE(x, y).y;
+    spr.setData("lx", x).setData("ly", y).setData("oy", spr.y - g).setData("od", spr.depth - g);
     this.liftSpr.push(spr);
     return spr;
   }
 
   private reliftLandmarks() {
-    for (const s of this.liftSpr)
-      s.y = this.isoE(s.getData("lx"), s.getData("ly")).y + s.getData("oy");
+    for (const s of this.liftSpr) {
+      const g = this.isoE(s.getData("lx"), s.getData("ly")).y;
+      s.setY(g + s.getData("oy")).setDepth(g + s.getData("od"));
+    }
   }
 
   addBerg(i: number) {
@@ -2147,7 +2300,7 @@ class Hearth extends Phaser.Scene {
     const ds = this.add
       .image(dp.x, dp.y, key)
       .setOrigin(0.5, 0.92)
-      .setDepth(this.iso(dx2, dy2).y + 18);
+      .setDepth(dp.y + 18); // lifted ground y, like every mover (see trackLift)
     this.decorSpr.set(i, ds);
   }
 
@@ -2212,14 +2365,14 @@ class Hearth extends Phaser.Scene {
         this.add
           .image(hp.x, hp.y + 16, md.hutSprite)
           .setOrigin(0.5, 0.92)
-          .setDepth(this.iso(md.hutX, md.hutY).y + 18)
+          .setDepth(hp.y + 18)
           .setVisible(this.z === 0),
       );
       const mdp = this.isoE(md.x, md.y);
       const s = this.add
         .sprite(mdp.x, mdp.y + 16, md.sprite)
         .setOrigin(0.5, 0.92)
-        .setDepth(this.iso(md.x, md.y).y + 18)
+        .setDepth(mdp.y + 18)
         .setVisible(this.z === 0);
       this.medicSpr.set(md.id, s);
       // the Spire medic shivers now and then between customers
@@ -2529,7 +2682,7 @@ class Hearth extends Phaser.Scene {
         const ms = this.add
           .image(mp2.x, mp2.y, m.key)
           .setOrigin(0.5, 0.9)
-          .setDepth(this.iso(m.x, m.y).y + 40);
+          .setDepth(mp2.y + 40);
         this.trackLift(ms, m.x, m.y);
         this.mountainSpr.push(ms);
       }
@@ -2546,11 +2699,11 @@ class Hearth extends Phaser.Scene {
           ? this.add
               .image(tp.x, tp.y + 16, tpc.key)
               .setOrigin(0.5, 0.7)
-              .setDepth(this.iso(tx2, ty2).y + 4)
+              .setDepth(tp.y + 4)
           : this.add
               .image(tp.x, tp.y + 16, tpc.key)
               .setOrigin(0.5, 0.9)
-              .setDepth(this.iso(tx2, ty2).y + 20);
+              .setDepth(tp.y + 20);
         this.trackLift(ts, tx2, ty2);
         this.templeSpr.push(ts);
       }
@@ -2611,9 +2764,9 @@ class Hearth extends Phaser.Scene {
     if (this.mud.has(i)) return T.MUD;
     return this.world.tiles[i];
   }
-  blockedAt(x: number, y: number) {
+  blockedAt(x: number, y: number, z = this.z, fromX = this.px, fromY = this.py) {
     if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) return true;
-    if (this.z === 1) return !this.digs.has((y | 0) * SIZE + (x | 0)); // underground: only carved tunnels
+    if (z === 1) return !this.digs.has((y | 0) * SIZE + (x | 0)); // underground: only carved tunnels
     // Terrain that has not streamed in is impassable — the player must never walk off the
     // edge of the loaded world into a hole (§4, unloaded state).
     if (!this.world.loadedAt(x, y)) return true;
@@ -2621,7 +2774,7 @@ class Hearth extends Phaser.Scene {
     if (this.tileAt(x, y) === T.WATER) return false;
     const climb = this.jumpT >= 0 ? 2 : 1; // jumping clears higher ledges
     // you can always drop DOWN a cliff (fall damage applies) — only climbing is limited
-    if (this.elevAt(x, y) - this.elevAt(this.px, this.py) > climb) return true;
+    if (this.elevAt(x, y) - this.elevAt(fromX, fromY) > climb) return true;
     const st = this.structSpr.get((y | 0) * SIZE + (x | 0));
     // non-blocking decor and farmplots are walkable
     if (
@@ -2638,6 +2791,24 @@ class Hearth extends Phaser.Scene {
       return true;
     if (this.medicBlock.has((y | 0) * SIZE + (x | 0))) return true;
     return false;
+  }
+
+  /**
+   * Where a keeper climbing out of `shaft` stands on the surface. Underground they can be
+   * anywhere within 2 tiles of it, and the same spot up top may be the shaft's own tile, a
+   * wall or a cliff face: surfacing there walled them in. So: where they are if that is
+   * open ground up top, else the nearest open tile round the shaft (land before water).
+   * Every candidate is within the server's ZNear (3) of the shaft.
+   */
+  private surfaceExit(shaft: number): [number, number] {
+    const sx = shaft % SIZE, sy = (shaft / SIZE) | 0;
+    const cands: [number, number][] = [];
+    if (((this.py | 0) * SIZE + (this.px | 0)) !== shaft) cands.push([this.px, this.py]);
+    for (const [dx, dy] of [[0, 1], [1, 0], [-1, 0], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]])
+      cands.push([sx + dx + 0.5, sy + dy + 0.5]);
+    cands.sort((a, b) => Math.hypot(a[0] - this.px, a[1] - this.py) - Math.hypot(b[0] - this.px, b[1] - this.py));
+    const open = (c: [number, number]) => !this.blockedAt(c[0], c[1], 0, sx + 0.5, sy + 0.5);
+    return cands.find((c) => open(c) && this.tileAt(c[0], c[1]) !== T.WATER) ?? cands.find(open) ?? [this.px, this.py];
   }
 
   nearMineshaft() {
@@ -2672,6 +2843,7 @@ class Hearth extends Phaser.Scene {
       const shaft = this.nearMineshaft();
       if (shaft >= 0 && now - this.zToggleAt > 900) {
         this.zToggleAt = now;
+        [this.px, this.py] = this.surfaceExit(shaft);
         this.setZ(0);
         return;
       }
@@ -3033,7 +3205,9 @@ class Hearth extends Phaser.Scene {
   }
 
   update(t: number, dtMs: number) {
+    this.dev.update(t);
     if (!this.ready) return;
+    this.streamZones(t);
     const dt = Math.min(dtMs / 1000, 0.05);
     const k = this.keys;
     let dx = +(k.D.isDown || k.RIGHT.isDown) - +(k.A.isDown || k.LEFT.isDown);
@@ -3075,9 +3249,13 @@ class Hearth extends Phaser.Scene {
       const speed = baseSpeed * (slowed ? 0.6 : 1) * dt * 0.707;
       const nx = this.px + wx * speed,
         ny = this.py + wy * speed;
-      if (!this.blockedAt(nx, this.py))
+      // a step that stays inside the tile we already stand in enters nothing new, so it
+      // is never blocked — or a keeper who ends up inside a blocked tile (surfacing on a
+      // shaft, something built underfoot) is walled in on every side (server: withinTile)
+      const inTile = (x: number, y: number) => (x | 0) === (this.px | 0) && (y | 0) === (this.py | 0);
+      if (inTile(nx, this.py) || !this.blockedAt(nx, this.py))
         this.px = Math.max(0, Math.min(SIZE - 1, nx));
-      if (!this.blockedAt(this.px, ny))
+      if (inTile(this.px, ny) || !this.blockedAt(this.px, ny))
         this.py = Math.max(0, Math.min(SIZE - 1, ny));
     }
     if (k.E.isDown) this.interact();
@@ -3098,6 +3276,11 @@ class Hearth extends Phaser.Scene {
     this.updateVegetationSway(dt);
     this.updateFlicker(dt);
 
+    this.voice.tick();
+    if (t >= this.ledgeCheckAt) {
+      this.ledgeCheckAt = t + 250;
+      if (this.z === 0 && !this.sailing && !this.swimming && this.atLedge()) this.voice.nearLedge();
+    }
     // Task 5: update self label position
     if (this.meLabel) {
       this.meLabel
@@ -3635,6 +3818,7 @@ export function quitToMenu(opts: { confirm?: boolean; error?: string } = {}) {
   //    listener bound to that scene — leaving it in the DOM would both leak and make
   //    buildDevPanel() short-circuit on re-join, wiring F10 to a dead scene.
   document.getElementById("devPanel")?.remove();
+  document.getElementById("devMeter")?.remove();
 
   // 6. Cancel any in-flight showMsg timer (e.g. a long error toast) and hide the HUD.
   showMsg("", 1);
@@ -3649,8 +3833,9 @@ export function quitToMenu(opts: { confirm?: boolean; error?: string } = {}) {
   // 8. The camera clamp counter-scales the DOM; the menu must not inherit that factor.
   document.documentElement.style.setProperty("--uiz", "1");
 
-  // 9. Allow startGame() to boot a fresh world, then let the menu take over.
+  // 9. Allow startGame() to boot a fresh world (cancelling one still loading), then let the menu take over.
   gameStarted = false;
+  bootSeq++;
   window.dispatchEvent(
     new CustomEvent("hearth:quit", { detail: { error: opts.error } }),
   );
@@ -3663,9 +3848,25 @@ document.addEventListener("click", (e) => {
   if (t?.closest?.("#quitBtn")) quitToMenu();
 });
 
-export function startGame() {
+/** Decoded boot atlases, installed by create(); decoding is off the main thread (atlasData.ts). */
+const bootBitmaps = new Map<string, ImageBitmap>();
+let bootSeq = 0;
+
+export async function startGame() {
   if (gameStarted) return;
   gameStarted = true;
+  // The menu has usually decoded these already (boot.ts); a quit while waiting cancels the start.
+  const seq = ++bootSeq;
+  try {
+    const bmps = await Promise.all(BOOT_PACKS.map((p) => packBitmap(p)));
+    BOOT_PACKS.forEach((p, i) => bootBitmaps.set(p, bmps[i]));
+  } catch (e) {
+    if (seq !== bootSeq) return;
+    gameStarted = false;
+    window.dispatchEvent(new CustomEvent("hearth:quit", { detail: { error: `Could not load the game art (${(e as Error).message}).` } }));
+    return;
+  }
+  if (seq !== bootSeq || !gameStarted) return;
   // Restore whatever the previous quit hid; CSS supplies each element's real default
   // (flex for #btns, none for the panels/modals).
   for (const el of gameDomEls()) el.style.display = "";

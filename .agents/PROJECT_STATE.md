@@ -1,6 +1,6 @@
 # Project state — Wyldra
 
-**Last updated:** 2026-09-20 · branch `dev` · session dump:
+**Last updated:** 2026-10-18 · branch `dev` · session dump:
 `session-context-dump/2026-09-20_1700__modular-building.md`
 
 This is the status source of truth. Update it in the same pass as any session dump.
@@ -79,7 +79,12 @@ and `SAVE_PATH` swapped and point a copy of `test.mjs` at the new port.
 owner's real save and the legacy server owns that file. The Go server writes
 `gameserver/world.<worldId>.save.json`.
 
-Status at this update: **all of the above green.**
+Status at this update (2026-10-18): **all of the above green**, `test-go.mjs` included (twice in a
+row). It had been red at 45adfeb on test flakiness, not game bugs: night creatures on the Dunes
+read as weather damage (environmental `hp` frames carry no `ang`; creature hits do), and the
+MOD stage's "open sand plain" could have a boulder next door. Run the suites against a throwaway
+save dir (`HEARTH_SAVE_DIR`) and spare ports rather than deleting
+`gameserver/world*.save.json`.
 
 ---
 
@@ -159,19 +164,54 @@ with their chunk. **Walls fill their tile** (the art is a block, not an edge pan
 validator, creature steering and the client's `blockedAt`; doors do not, and a blocking wall
 cannot be placed on a tile a player stands on. Support is one rule (roof→pillar here or wall
 next door, fixture→floor, decor→either) and removal cascades with half refunds.
-**A roof is shelter** — the survival tick skips sandstorm, blizzard, desert heat and glacial
-cold for a roofed player (hunger and thirst deliberately still apply), which is what makes the
-materials tier worth spending. Lantern hooks light at night. Bridge segments are the one piece allowed
+Roofs were retired; **modular walls and fixtures are sandstorm shelter** (`Room.sheltered`, with
+blocking structures and village / medic huts), and a sheltered keeper also takes no desert heat
+while the storm blows (docs/10 §9.4). Lantern hooks light at night. Bridge segments are the one piece allowed
 over water and must stay moored to land; cutting a span drops the rest and stops counting as
 swimming. Wire spec §12; `gameserver/room/modules.go`, `modules_test.go`, MOD stage of
 `test-go.mjs`.
+
+### Asset pipeline and streaming
+The browser never rasterises an SVG. `tools/atlas/build-atlases.mjs` (`npm run atlas`; run
+automatically by `npm start`, `npm run dev`, `npm run build`, cached by an input hash) bakes
+`src/assets.ts`'s manifest into PNG atlases in `assets/atlas/` plus `src/generated/atlas.json`
+(both gitignored). Packs (`PACK_OF`): `base` + `keeper` load before the scene starts
+(decoded off-thread with `createImageBitmap` while the menu is open); each NPC's clips are its
+own pack, streamed per island (`src/zones.ts`, ~110 tiles off the shore) or on demand when one
+walks into view. `src/atlas.ts` registers every frame as an alias texture of its atlas, so all
+the old string keys still work. Keeper skins: the build bakes one atlas per gear variant plus a
+shirt mask; other shirts are blended in `src/skinWorker.ts`. `assets/sw.js` caches `/atlas/`
+cache-first (names are content-hashed) and falls back to the network if Cache Storage fails.
+Join runs in parallel with loading (`net.ts prefetchJoin/takeJoin`).
+
+Server side, the per-tick `cre` frame only carries entities within 40 tiles of each player
+and is skipped for a client whose queue is half full (docs/10 §9.2.1).
+
+### Island folk: alarm and regard
+A creature within 14 tiles of a village fire sends the whole village to its huts (not only folk
+within 7 of it). Each island also tallies the harm each keeper does there (trees felled, blighting
+fellings, game killed; fades 1 per 20s, not saved): wary folk `scold`, hostile ones `shun` (children
+and villagers hide, watchers scold). `gameserver/room/folk_regard.go`, docs/10 §13.4. The keeper's
+swing reach is now 1.5 tiles (`AtkReach`), down from the legacy 2.4.
+Weather: a sandstorm sends the whole Dunes village in, a snowstorm the Spire, rain only the Woods /
+Marsh children (`shelter` then `hide`; `folk_weather.go`, docs/10 §13.5).
+
+### Movement: ledges and the mine exit
+Fall damage is per ledge crossed (`fallDrop`), and the client draws a worn, crumbling lip on every 2+ drop edge.
+The keeper has a voice (`src/keeperVoice.ts`, client-only): it explains a ledge the first time you
+reach one, reacts to a fall, and answers the folk — greetings, scolding, shunning, weather — taking
+turns with them (one villager greets at a time).
+Surfacing from a mine lands on open ground by the shaft (`surfaceExit`), and a step within your
+own tile is never blocked (client + server), so nobody can be walled into a blocked tile. docs/10 §5.
 
 ### Dev tooling
 F9 kit and F10 panel, gated on the ticket's `dev` claim. `HEARTH_DEV_ALL=1` (set by
 `npm run start:dev`) grants it to **loopback requests only** — checked per-request, not on the
 bind address, because control binds `0.0.0.0` for LAN play. `HEARTH_DEV_TOKS` /
 `HEARTH_DEV_USERS` allowlist named accounts. **The claim is baked into the ticket at join, so
-you must reconnect after enabling it.**
+you must reconnect after enabling it.** A dev session also shows an FPS / frame-time / network
+meter (bottom-left), and the F10 panel's "Combat ranges + motion lines" toggle draws every
+player's and enemy's attack radius and heading (`src/devOverlay.ts`; radii mirror the Go server).
 
 ---
 
