@@ -608,7 +608,7 @@ class Hearth extends Phaser.Scene {
       `<div style="color:#9ab;margin:6px 0 4px">Debug view</div>` +
       `<label style="cursor:pointer"><input type="checkbox" id="devRanges"> Combat ranges + motion lines</label>` +
       `<div style="color:#789;font-size:11px;line-height:1.5;margin-top:3px">` +
-      `<span style="color:#5fd4ff">■</span> you: swing reach 2.4, line to target<br>` +
+      `<span style="color:#5fd4ff">■</span> you: swing reach 1.5, line to target<br>` +
       `<span style="color:#9be37a">■</span> other players: swing reach<br>` +
       `<span style="color:#ff5a4a">■</span> enemy contact 1.1 · <span style="color:#ffa040">■</span> ranged band<br>` +
       `<span style="color:#c08cff">■</span> wraith dart range · arrows: next 1s of motion</div>` +
@@ -2166,16 +2166,25 @@ class Hearth extends Phaser.Scene {
 
   // --- streamed chunk application (§4) ---------------------------------------------
 
-  /** Track a landmark sprite so it can be re-lifted when its tile's elevation arrives. */
+  /**
+   * Track a landmark sprite so it can be re-lifted when its tile's elevation arrives.
+   * Its depth moves with it: everything in the world sorts by the screen y of where it
+   * stands, elevation lift included — the player, creatures and folk do (update(), folk.ts),
+   * so a placed object sorted by its flat, unlifted y would draw over a keeper standing
+   * in front of it on high ground.
+   */
   private trackLift(spr: Phaser.GameObjects.Image, x: number, y: number) {
-    spr.setData("lx", x).setData("ly", y).setData("oy", spr.y - this.isoE(x, y).y);
+    const g = this.isoE(x, y).y;
+    spr.setData("lx", x).setData("ly", y).setData("oy", spr.y - g).setData("od", spr.depth - g);
     this.liftSpr.push(spr);
     return spr;
   }
 
   private reliftLandmarks() {
-    for (const s of this.liftSpr)
-      s.y = this.isoE(s.getData("lx"), s.getData("ly")).y + s.getData("oy");
+    for (const s of this.liftSpr) {
+      const g = this.isoE(s.getData("lx"), s.getData("ly")).y;
+      s.setY(g + s.getData("oy")).setDepth(g + s.getData("od"));
+    }
   }
 
   addBerg(i: number) {
@@ -2198,7 +2207,7 @@ class Hearth extends Phaser.Scene {
     const ds = this.add
       .image(dp.x, dp.y, key)
       .setOrigin(0.5, 0.92)
-      .setDepth(this.iso(dx2, dy2).y + 18);
+      .setDepth(dp.y + 18); // lifted ground y, like every mover (see trackLift)
     this.decorSpr.set(i, ds);
   }
 
@@ -2263,14 +2272,14 @@ class Hearth extends Phaser.Scene {
         this.add
           .image(hp.x, hp.y + 16, md.hutSprite)
           .setOrigin(0.5, 0.92)
-          .setDepth(this.iso(md.hutX, md.hutY).y + 18)
+          .setDepth(hp.y + 18)
           .setVisible(this.z === 0),
       );
       const mdp = this.isoE(md.x, md.y);
       const s = this.add
         .sprite(mdp.x, mdp.y + 16, md.sprite)
         .setOrigin(0.5, 0.92)
-        .setDepth(this.iso(md.x, md.y).y + 18)
+        .setDepth(mdp.y + 18)
         .setVisible(this.z === 0);
       this.medicSpr.set(md.id, s);
       // the Spire medic shivers now and then between customers
@@ -2580,7 +2589,7 @@ class Hearth extends Phaser.Scene {
         const ms = this.add
           .image(mp2.x, mp2.y, m.key)
           .setOrigin(0.5, 0.9)
-          .setDepth(this.iso(m.x, m.y).y + 40);
+          .setDepth(mp2.y + 40);
         this.trackLift(ms, m.x, m.y);
         this.mountainSpr.push(ms);
       }
@@ -2597,11 +2606,11 @@ class Hearth extends Phaser.Scene {
           ? this.add
               .image(tp.x, tp.y + 16, tpc.key)
               .setOrigin(0.5, 0.7)
-              .setDepth(this.iso(tx2, ty2).y + 4)
+              .setDepth(tp.y + 4)
           : this.add
               .image(tp.x, tp.y + 16, tpc.key)
               .setOrigin(0.5, 0.9)
-              .setDepth(this.iso(tx2, ty2).y + 20);
+              .setDepth(tp.y + 20);
         this.trackLift(ts, tx2, ty2);
         this.templeSpr.push(ts);
       }

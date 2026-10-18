@@ -92,6 +92,9 @@ type Folk struct {
 	joins   bool    // whether they come to this part's gathering at the fire
 	partner *Folk   // who they are chatting with
 	chatCD  int     // ticks before they are up for another chat
+
+	scoldTk int     // ticks left telling off a keeper they saw harm the land (folk_regard.go)
+	scoldAt *Player // that keeper
 }
 
 // folkStep is one thing a folk member means to do: go somewhere, then do
@@ -310,7 +313,7 @@ func (r *Room) folkTick() {
 		}
 
 		if f.state == fsHidden {
-			if r.folkThreatened(f, folkClearR) {
+			if r.folkThreatened(f, folkClearR) || r.villageAlarmed(f, folkAlarmClearR) || r.shunning(f, folkScoldR+3) {
 				f.calm = 0
 				continue
 			}
@@ -324,16 +327,28 @@ func (r *Room) folkTick() {
 			continue
 		}
 
-		// danger first: run for the hut and duck inside
-		if r.folkThreatened(f, folkThreatR) || f.state == fsFlee {
-			if f.state != fsFlee && !r.folkThreatened(f, folkThreatR) {
+		// danger first: run for the hut and duck inside — a creature near them or
+		// near the village fire, or a keeper the village has turned against
+		// ("shun" is the same run, so the client can tell what they are running from)
+		creDanger := r.folkThreatened(f, folkThreatR) || r.villageAlarmed(f, folkAlarmR)
+		shun := !creDanger && r.shunning(f, folkScoldR)
+		danger := creDanger || shun
+		if danger || f.state == fsFlee {
+			if f.state != fsFlee && !danger {
 				f.state = fsTask
 			} else {
 				if f.state != fsFlee {
 					f.going = 0
 					f.dropPlans()
 				}
-				f.state, f.Act, f.Face = fsFlee, "run", math.NaN()
+				run := f.Act // still on the way in: keep running from what sent them
+				if creDanger || run != "shun" {
+					run = "run"
+				}
+				if shun {
+					run = "shun"
+				}
+				f.state, f.Act, f.Face = fsFlee, run, math.NaN()
 				f.going++
 				if r.folkStep(f, dx, dy, folkRunSp) || f.stuck > 6 || f.going > folkGoingTk {
 					f.state, f.Act, f.calm, f.stuck = fsHidden, "hide", 0, 0
@@ -357,6 +372,20 @@ func (r *Room) folkTick() {
 		}
 		if f.state == fsHome {
 			f.state = fsTask
+		}
+
+		// a keeper they saw harm the land, or one their village resents: tell them off
+		if f.scoldTk > 0 {
+			f.scoldTk--
+			if q := f.scoldAt; q != nil && r.players[q.S.ID] == q && q.Z == 0 {
+				f.scold(q)
+				continue
+			}
+			f.scoldTk, f.scoldAt = 0, nil
+		}
+		if q := r.resentedNear(f, folkScoldR, standWary); q != nil {
+			f.scold(q)
+			continue
 		}
 
 		// a player close by: stop and talk (a sitter stays seated)

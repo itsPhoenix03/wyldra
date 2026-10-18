@@ -273,15 +273,16 @@ if (!sd) fail('workbench not demolished');
 if (A.state.inv.wood !== woodBefore + 4) fail(`refund wrong: ${woodBefore} -> ${A.state.inv.wood}`);
 console.log('demolition OK: refunded 4 wood, removal synced to B');
 
-// animals broadcast in sim tick — spawn is player-biased, so expect some near us.
-// The Go server only sends what is within `r` tiles of the player (docs/10 §6.1), so
-// the world-wide count the root test.mjs asserts is no longer visible on the wire.
+// animals broadcast in sim tick. The Go server only sends what is within `r` tiles
+// of the player (docs/10 §9.2.1), so the world-wide count the root test.mjs asserts
+// is no longer visible on the wire — and how many happen to be near us is luck
+// (spawns favour a random player, under a world-wide cap of 20). The population
+// itself is room.TestAnimalSpawnCapCadenceAndBiome; here, the radius contract.
 const cre = A.msgs.filter((m) => m.t === 'cre').pop();
 if (!cre || !Array.isArray(cre.a)) fail('no animal data in sim broadcast');
 if (!(cre.r > 0)) fail('cre frame carries no interest radius: ' + cre.r);
 const far = cre.a.filter((a) => Math.hypot(a[1] - px, a[2] - (py + 1)) > cre.r + 1);
 if (far.length) fail(`cre frame sent ${far.length} animals beyond r=${cre.r}`);
-if (cre.a.length < 1) fail('no animals spawned near the player');
 console.log('animal sim OK (', cre.a.length, 'animals roaming:', [...new Set(cre.a.map(a => a[3]))].join(','), ')');
 
 // --- mining flow: gather materials, rebuild workbench, craft pick + mine entrance, descend, dig ---

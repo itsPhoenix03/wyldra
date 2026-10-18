@@ -114,7 +114,10 @@ func (r *Room) handleGather(p *Player, m map[string]any) {
 	r.sendInv(p)
 
 	if kind == int(world.NodeTree) {
-		r.chopEcosystem(int(x), int(y))
+		r.addHarm(p, x, y, harmTree)
+		if r.chopEcosystem(int(x), int(y)) {
+			r.addHarm(p, x, y, harmBlight)
+		}
 	}
 }
 
@@ -159,12 +162,12 @@ func (r *Room) clearBuiltOverNodes() {
 }
 
 // chopEcosystem is the legacy tree reaction: every 8th tree felled in a 16x16
-// sector turns a few grass tiles to mud.
-func (r *Room) chopEcosystem(x, y int) {
+// sector turns a few grass tiles to mud. It reports whether any ground turned.
+func (r *Room) chopEcosystem(x, y int) bool {
 	sk := ((x >> 4) << 8) | (y >> 4)
 	r.sectorChops[sk]++
 	if r.sectorChops[sk]%8 != 0 {
-		return
+		return false
 	}
 	var newMud []int
 	bx, by := (x>>4)<<4, (y>>4)<<4
@@ -180,6 +183,7 @@ func (r *Room) chopEcosystem(x, y int) {
 	if len(newMud) > 0 {
 		r.broadcast(map[string]any{"t": "mud", "tiles": newMud})
 	}
+	return len(newMud) > 0
 }
 
 // --- craft ----------------------------------------------------------------
@@ -796,8 +800,14 @@ func (r *Room) handleChestMove(p *Player, m map[string]any) {
 
 // --- attack (structures) --------------------------------------------------
 
+// AtkReach is how far, in tiles, a swing reaches a creature or animal. The
+// legacy 2.4 let a keeper hit things well over two tiles away — more than
+// twice the 1.1 a creature needs to bite back. Structures and modules keep
+// their own 2.4 below: demolition is aimed at a tile, not a body.
+const AtkReach = 1.5
+
 // handleAtk is the legacy `atk`: it scans creatures and then animals for the
-// nearest target within 2.4 tiles, and only falls through to structure
+// nearest target within AtkReach, and only falls through to structure
 // demolition when it finds none.
 //
 // The two scans walk creOrder and aniOrder rather than the maps. The comparison
@@ -839,11 +849,11 @@ func (r *Room) handleAtk(p *Player, m map[string]any) {
 	case "sword", "isword":
 		atkClip = "slash"
 	}
-	// target search: creatures first, then animals, nearest wins within 2.4
+	// target search: creatures first, then animals, nearest wins within AtkReach
 	var bestC *Creature
 	var bestA *Animal
 	bid := ""
-	bd := 2.4
+	bd := AtkReach
 	for _, c := range r.creOrder {
 		if d := math.Hypot(c.X-p.X, c.Y-p.Y); d < bd {
 			bd, bestC, bestA, bid = d, c, nil, c.ID

@@ -385,21 +385,29 @@ func TestAtkRefusedOffSurface(t *testing.T) {
 	}
 }
 
-// A creature just beyond 2.4 tiles is out of reach, and the swing falls through
-// to the structure-demolition branch instead.
-func TestAtkReachIs24Tiles(t *testing.T) {
+// A creature just beyond AtkReach is out of reach, and the swing falls through
+// to the structure-demolition branch instead; one just inside it is hit.
+func TestAtkReach(t *testing.T) {
 	f := newFixture(t)
 	gx, gy := landTile(t, f.r.world, world.TGrass)
 	f.stand(gx, gy, 0)
-	c := f.spawnAt("crawler", gx+2.5, gy, false)
+	c := f.spawnAt("crawler", gx+AtkReach+0.1, gy, false)
 	hp := c.HP
 	f.reset()
 	f.r.handleAtk(f.p, map[string]any{"t": "atk"})
 	if c.HP != hp {
-		t.Fatal("a creature 2.5 tiles away was hit; the reach is 2.4")
+		t.Fatalf("a creature %.1f tiles away was hit; the reach is %.1f", AtkReach+0.1, AtkReach)
 	}
 	if act := f.lastOfType("act"); act == nil || act["targetI"] != nil {
 		t.Fatalf("act.targetI = %v on a miss, want null", act["targetI"])
+	}
+
+	c.X = gx + AtkReach - 0.1
+	f.now += 1000 // past the 400ms swing cooldown
+	f.reset()
+	f.r.handleAtk(f.p, map[string]any{"t": "atk"})
+	if c.HP == hp {
+		t.Fatalf("a creature %.1f tiles away was not hit; the reach is %.1f", AtkReach-0.1, AtkReach)
 	}
 }
 

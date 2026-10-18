@@ -56,6 +56,7 @@ func (r *Room) onSimTick() {
 
 	// --- island folk: daily round, fleeing to their huts ---
 	r.folkTick()
+	r.harmFadeTick()
 
 	// --- environmental damage, hunger/thirst, campfire regen (every 5s) ---
 	if r.tickN%25 == 0 {

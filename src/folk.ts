@@ -127,6 +127,22 @@ const LINES: Record<string, string[]> = {
 
 const SHOUTS = ["Blight! Inside, quick!", "They're coming — get in!", "Run!", "To the hut!"];
 
+// The folk turn on a keeper who harms their island (server: gameserver/room/folk_regard.go).
+/** `shun`: running from a keeper the village has turned against. */
+const SHUN_SHOUTS = ["It's the tree-cutter — inside!", "Don't let them near the little ones!", "Get in, they're back!", "Bar the door!"];
+/** `scold`: standing to tell a keeper off — for harm they just saw, or harm they remember. */
+const SCOLDS: Record<string, string[]> = {
+  _: ["Leave our trees be!", "You'll strip this island bare.", "That's our game you're killing.", "Take what you need. Not all of it.", "The ground dies where the trees go."],
+  woods_child: ["You cut down the climbing tree!", "Mum says you're greedy.", "Leave the deer alone!"],
+  elder_woods: ["Every tree you fell, the blight takes the ground behind it.", "We have kept this wood for three lifetimes. Leave it standing."],
+  shaman: ["The sand remembers every step. Yours are heavy, keeper.", "You hunt like the blight hunts — for nothing."],
+  ashmark_hunter: ["We hunt to eat. You hunt to empty the dunes.", "Leave some for the rest of us."],
+  elder_yvenne: ["The marsh gives, and you only take.", "Mud on your boots, rot in your wake. Go."],
+  tribal: ["You've muddied the water for all of us.", "Go fish somewhere else."],
+  elder_spire: ["Wood is life up here. You're taking ours.", "Burn your own trees, keeper."],
+  villager_snow: ["Those pines took a hundred winters to grow.", "We'll freeze if you take them all."],
+};
+
 /** What drifts over when two neighbours chat (only to a keeper close enough to hear). */
 const CHATTER: Record<string, string[]> = {
   villager: ["Roof's holding?", "Hand me the twine.", "Wolves were close last night.", "Fire wants feeding.", "Hear that, up by the ridge?"],
@@ -150,11 +166,11 @@ const SPEECH: Record<string, string[]> = {
 };
 
 /** Moving: the walk loop (play and run are the walk sped up). */
-const MOVE_ACTS = new Set(["walk", "run", "play"]);
+const MOVE_ACTS = new Set(["walk", "run", "shun", "play"]);
 /** Work: a one-shot clip looped with a breather, facing the work. */
 const WORK_ACTS = new Set(["collect", "build", "craft"]);
 /** Holding still: drawn facing the way the server says (`face`), not turned by drift. */
-const STILL_ACTS = new Set(["sit", "collect", "build", "craft", "chat", "speak", "watch", "idle"]);
+const STILL_ACTS = new Set(["sit", "collect", "build", "craft", "chat", "speak", "watch", "idle", "scold"]);
 
 type FolkSpr = Phaser.GameObjects.Sprite;
 
@@ -199,7 +215,7 @@ export class FolkView {
         s.add
           .image(hp.x, hp.y + 16, c.hutSprite)
           .setOrigin(0.5, 0.92)
-          .setDepth(s.iso(c.hutX, c.hutY).y + 18)
+          .setDepth(hp.y + 18) // lifted like the folk themselves (tick: setDepth(vy)), or they sort behind it on hills
           .setVisible(s.z === 0),
       );
       const fk = c.fireY * 100000 + c.fireX;
@@ -209,11 +225,11 @@ export class FolkView {
       const img = s.add
         .image(fp.x, fp.y + 16, "campfire")
         .setOrigin(0.5, 0.85)
-        .setDepth(s.iso(c.fireX, c.fireY).y + 18)
+        .setDepth(fp.y + 18)
         .setVisible(s.z === 0);
       const glow = s.add
         .circle(fp.x, fp.y + 12, 70, 0xffaa44, 0.13)
-        .setDepth(s.iso(c.fireX, c.fireY).y + 19)
+        .setDepth(fp.y + 19)
         .setBlendMode(Phaser.BlendModes.ADD)
         .setVisible(s.z === 0);
       this.fires.push({ img, glow, seed: (c.fireX * 31 + c.fireY * 17) % 100 / 100 });
@@ -298,9 +314,10 @@ export class FolkView {
     if (STILL_ACTS.has(act)) this.orient(sp);
     if (MOVE_ACTS.has(act)) {
       this.look(sp);
-      if (act === "run" && this.clock - sp.getData("shoutAt") > 6) {
+      if ((act === "run" || act === "shun") && this.clock - sp.getData("shoutAt") > 6) {
         sp.setData("shoutAt", this.clock);
-        this.say(id, SHOUTS[(Math.random() * SHOUTS.length) | 0], 1800);
+        const lines = act === "shun" ? SHUN_SHOUTS : SHOUTS;
+        this.say(id, lines[(Math.random() * lines.length) | 0], 1800);
       }
     } else if (act === "sit") {
       const k = this.clip(sp, "sit");
@@ -309,6 +326,13 @@ export class FolkView {
       else this.look(sp);
     } else if (WORK_ACTS.has(act)) {
       this.work(sp, act);
+    } else if (act === "scold") {
+      this.look(sp);
+      if (this.clock - (sp.getData("scoldAt") ?? -1e9) > 6 && this.near(sp, 9)) {
+        sp.setData("scoldAt", this.clock);
+        const lines = SCOLDS[kind] && Math.random() < 0.6 ? SCOLDS[kind] : SCOLDS._;
+        this.say(id, lines[(Math.random() * lines.length) | 0], 3000);
+      }
     } else {
       this.look(sp);
       if (prev === act) return; // only turned
@@ -340,7 +364,7 @@ export class FolkView {
       if (this.s.anims.exists(k)) {
         const at = sp.anims.isPlaying ? sp.anims.currentFrame?.index ?? 1 : 1;
         sp.play({ key: k, startFrame: at - 1 });
-        sp.anims.timeScale = act === "run" ? 1.7 : act === "play" ? 1.5 : 1;
+        sp.anims.timeScale = act === "run" || act === "shun" ? 1.7 : act === "play" ? 1.5 : 1;
         sp.setData("clip", k);
         return;
       }
@@ -475,7 +499,7 @@ export class FolkView {
         }
       }
       // procedural motion where there is no drawn clip, and small life on top of standing
-      const ph = sp.getData("phase") + dt * (act === "run" ? 16 : act === "play" ? 13 : 9);
+      const ph = sp.getData("phase") + dt * (act === "run" || act === "shun" ? 16 : act === "play" ? 13 : 9);
       sp.setData("phase", ph);
       let lift = 0, rot = 0, sy = 1;
       const drawn = !!sp.getData("clip");
@@ -493,6 +517,7 @@ export class FolkView {
           rot = Math.sin(ph * 0.5) * 0.04;
         } else if (act === "chat") sy = 1 + Math.sin(ph * 0.7) * 0.018; // nodding along
         else if (act === "speak") rot = Math.sin(ph * 0.3) * 0.035; // gesturing to the gathering
+        else if (act === "scold") rot = Math.sin(ph * 1.1) * 0.07; // waving the keeper off
         else sy = 1 + Math.sin(ph * 0.25) * 0.012; // breathing
       }
       sp.setPosition(vx, vy - lift).setRotation(rot).setScale(1, sy).setDepth(vy);

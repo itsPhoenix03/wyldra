@@ -122,8 +122,7 @@ if (legacy) {
 // any art changed. A no-op in well under a second when nothing did.
 if (withClient) {
   const atlas = spawnSync(process.execPath, [resolve(ROOT, 'tools/atlas/build-atlases.mjs')], { cwd: ROOT, stdio: 'inherit' });
-  if (atlas.status !== 0) { process.stdout.write('[atlas] build failed — not starting the client
-'); shutdown(1); }
+  if (atlas.status !== 0) { process.stdout.write('[atlas] build failed — not starting the client\n'); shutdown(1); }
   else run('client', 'npx', ['vite', '--host']);
 }
 

@@ -188,6 +188,13 @@ Join runs in parallel with loading (`net.ts prefetchJoin/takeJoin`).
 Server side, the per-tick `cre` frame only carries entities within 40 tiles of each player
 and is skipped for a client whose queue is half full (docs/10 §9.2.1).
 
+### Island folk: alarm and regard
+A creature within 14 tiles of a village fire sends the whole village to its huts (not only folk
+within 7 of it). Each island also tallies the harm each keeper does there (trees felled, blighting
+fellings, game killed; fades 1 per 20s, not saved): wary folk `scold`, hostile ones `shun` (children
+and villagers hide, watchers scold). `gameserver/room/folk_regard.go`, docs/10 §13.4. The keeper's
+swing reach is now 1.5 tiles (`AtkReach`), down from the legacy 2.4.
+
 ### Dev tooling
 F9 kit and F10 panel, gated on the ticket's `dev` claim. `HEARTH_DEV_ALL=1` (set by
 `npm run start:dev`) grants it to **loopback requests only** — checked per-request, not on the

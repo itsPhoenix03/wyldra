@@ -141,7 +141,11 @@ type Room struct {
 	removed     map[int]int64 // tile -> wall-clock ms at which the node returns
 	mudTiles    map[int]bool
 	sectorChops map[int]int // 16x16 sector key -> trees felled
-	farms       map[int]*Farm
+	// harm is how much each keeper (by userId) has hurt each island's land:
+	// trees felled, ground blighted, game killed (folk_regard.go). It fades with
+	// time and is not saved: a restart is a fresh start with the folk.
+	harm  map[string]map[string]float64
+	farms map[int]*Farm
 	// Modular building, keyed "tile:slot". modOrder is the insertion-order
 	// mirror: chunk frames, saves and demolition ties all read it (§3).
 	modules     map[string]*Module
@@ -290,6 +294,7 @@ func New(cfg Config) (*Room, error) {
 		removed:       map[int]int64{},
 		mudTiles:      map[int]bool{},
 		sectorChops:   map[int]int{},
+		harm:          map[string]map[string]float64{},
 		farms:         map[int]*Farm{},
 		modules:       map[string]*Module{},
 		chestInv:      map[int]map[string]int{},

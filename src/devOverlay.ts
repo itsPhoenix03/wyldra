@@ -12,7 +12,7 @@ import Phaser from 'phaser';
  *    and a motion line showing where it is heading over the next second.
  *
  * The radii mirror the authoritative Go server; keep them in step with it:
- *   player swing      2.4   gameserver/room/actions.go  (target search: nearest within 2.4)
+ *   player swing      1.5   gameserver/room/actions.go  AtkReach (nearest target within it)
  *   creature contact  1.1   gameserver/room/creatures.go (contact damage, < 1.1)
  *   brute water bolt  1.5–7 creatures.go bruteBolt
  *   lancer beam       1.5–9 creatures.go lancerBeam
@@ -20,7 +20,7 @@ import Phaser from 'phaser';
  * ──────────────────────────────────────────────────────────────────────────── */
 
 const TW = 64, TH = 32;
-const PLAYER_REACH = 2.4;
+const PLAYER_REACH = 1.5;
 const CONTACT = 1.1;
 const RANGED: Record<string, [number, number]> = { brute: [1.5, 7], blight_lancer: [1.5, 9] };
 const AGGRO: Record<string, number> = { frost_wraith: 10 };

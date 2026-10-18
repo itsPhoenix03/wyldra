@@ -340,7 +340,7 @@ enumerated in one place.
 ### 9.1 Client → server
 
 No new message types. `atk` gains its creature/animal half: the handler now scans creatures
-and then animals for the nearest target within **2.4** tiles and only falls through to
+and then animals for the nearest target within **1.5** tiles (`AtkReach`; the legacy server's 2.4 reached too far) and only falls through to
 structure demolition when it finds none.
 
 - `act.targetI` carries the struck creature or animal id (e.g. `"c12"`, `"a3"`), or `null` on
@@ -981,13 +981,16 @@ Each camp has a fixed roster (Woods: `villager`, `villager2`, `woods_child`;
 Dunes: `ashmark_hunter`, `villager2`; Marsh: `elder_yvenne`, `villager`). Folk are
 server-simulated, cannot be attacked, and ride every `cre` frame as
 `f: [id, x, y, kind, act]` (positions are tile-centre floats, 2 dp). `act` is one
-of `idle`, `walk`, `run`, `talk`, `sit`, `collect`, `build`, `craft`, `hide`:
+of `idle`, `walk`, `run`, `shun`, `talk`, `scold`, `sit`, `collect`, `build`, `craft`, `hide`
+(and the routine acts of §13.3; `shun` and `scold` are §13.4):
 
 - By day they wander the yard, work, sit at the fire, and stop and `talk` to a
   surface player within 2.4 tiles. What they say is client-side flavour.
-- A creature within 7 tiles sends them running (`run`) to the hut door; inside
-  they are `hide` and invisible to creatures. They come back out once nothing is
-  within 10 tiles for 15 ticks.
+- A creature within 7 tiles of them, **or within 14 tiles of their village's fire**,
+  sends them running (`run`) to the hut door; inside they are `hide` and invisible
+  to creatures. They come back out once nothing is within 10 tiles of them and
+  nothing within 18 of the fire, for 15 ticks. The fire rule is the village alarm:
+  without it, folk on the far side of the village sat on while their neighbours fled.
 - At night everyone but the camp's watcher (the hunter, the elder) turns in
   (`hide`); the watcher sits by the fire until something comes for it.
 
@@ -1026,3 +1029,20 @@ The Slice 3 rules (§9) still pick targets, ranges and damage. Layered on top:
 - **Idle.** With no prey, crawlers, stalkers, wolves and drowned chase folk within
   12 tiles (folk are never damaged). Every other idle creature ambles near home
   at 40% speed. Searching, folk-chasing and ambling creatures never gnaw.
+
+### 13.4 Village regard — the folk remember harm
+
+`gameserver/room/folk_regard.go`. Each island's folk keep a per-keeper (by `userId`)
+tally of harm done to their island: **1** per tree felled, **+4** when that felling
+blights the ground (`chopEcosystem` turned grass to mud), **2** per animal killed.
+It is capped at 30, forgiven at 1 per 20 s, and not saved.
+
+| Tally | Standing | What the folk do |
+|---|---|---|
+| < 6 | welcome | `talk` as before |
+| ≥ 6 | wary | within 6 tiles they `scold` instead of talking: `face` points at the keeper |
+| ≥ 14 | hostile | villagers and children `shun` (run for the hut, then `hide`) within 6 tiles and stay in while the keeper is within 9; watchers stand and `scold` |
+
+Folk who see the harm done (within 12 tiles) `scold` that keeper for 12 ticks
+whatever the tally. A change of standing reaches the keeper as a `msg`. Lines are
+client-side flavour (`src/folk.ts` `SCOLDS`, `SHUN_SHOUTS`).

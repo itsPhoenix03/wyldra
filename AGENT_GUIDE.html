@@ -173,7 +173,7 @@ worldgen, bump the default seed or tell the user to delete the save.</div>
 <tr><td><code>build</code></td><td><code>{i,kind,dir}</code></td><td>Place structure (consumes inventory item). dir 0/1 = wall orientation. Building on same-kind structure stacks (wall→2). Engine: only near CORE with 4 monoliths lit. Mineshaft: DIGGABLE tiles; carves 3×3 chamber.</td></tr>
 <tr><td><code>torch</code></td><td><code>{}</code></td><td>Place torch at player's current underground tile (z=1, dug, has torch item).</td></tr>
 <tr><td><code>furn</code></td><td><code>{i,kind}</code></td><td>Place mine furniture ('chest'|'bed'|indoor decor). Requires z=1 on a dug tile (was: shelter room, Chebyshev ≤ shelter lvl). Bed = personal respawn point (beats campfires).</td></tr>
-<tr><td><code>atk</code></td><td><code>{}</code></td><td>Melee. Rejected when z=1. Hits nearest creature/animal ≤2.4, else demolishes nearest structure (double dmg, refunds half cost). Dmg: isword 5 / sword 3 / axe 2 / else 1 (uses <b>equipped</b>, not owned).</td></tr>
+<tr><td><code>atk</code></td><td><code>{}</code></td><td>Melee. Rejected when z=1. Hits nearest creature/animal ≤1.5 (Go <code>AtkReach</code>; legacy 2.4), else demolishes nearest structure (double dmg, refunds half cost). Dmg: isword 5 / sword 3 / axe 2 / else 1 (uses <b>equipped</b>, not owned).</td></tr>
 <tr><td><code>eq</code></td><td><code>{k}</code></td><td>Equip tool k (must own) or null. Broadcast so others see held item.</td></tr>
 <tr><td><code>usecore</code></td><td><code>{i}</code></td><td>Awaken monolith index 0-3 (needs core item, within 3 tiles).</td></tr>
 <tr><td><code>water</code></td><td><code>{}</code></td><td>Collect water when adjacent to a water tile (max 10).</td></tr>
