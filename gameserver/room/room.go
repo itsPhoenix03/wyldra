@@ -177,8 +177,9 @@ type Room struct {
 	bridgeValid bool
 
 	// Island camps and their folk (folk.go). folk is ordered by camp roster.
-	camps []world.FolkCamp
-	folk  []*Folk
+	camps    []world.FolkCamp
+	folk     []*Folk
+	villages []*village // one per island, in camp order (folk_routine.go)
 
 	// Animals. aniOrder is the same insertion-order mirror as creOrder.
 	animals  map[string]*Animal

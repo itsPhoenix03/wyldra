@@ -12,6 +12,7 @@
 //   folk_hut.svg        Woods — thatch and wattle, a split-log woodpile
 //   folk_hut_dunes.svg  Dunes — sun-bleached hide wrap, dye bands, a hide rack
 //   folk_hut_marsh.svg  Marsh — reed walls, dark reed roof, a bone totem
+//   folk_hut_spire.svg  Spire — hide-wrapped like the medic's, snow-capped, a woodpile
 
 import { writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -167,5 +168,9 @@ writeFileSync(`${SPR}/folk_hut_dunes.svg`, hut({
 writeFileSync(`${SPR}/folk_hut_marsh.svg`, hut({
   wall: '#7c7a4e', wallDark: '#3f3f28', weave: '#56553a',
   roof: '#6f6a3e', roofDark: '#3d3a22', roofLine: '#4f4b2c', sign: false, decor: totem,
+}));
+writeFileSync(`${SPR}/folk_hut_spire.svg`, hut({
+  wall: '#9a8466', wallDark: '#55452f', weave: '#6b5640',
+  roof: '#b89b62', roofDark: '#6e5a36', roofLine: '#806a40', snow: true, sign: false, decor: woodpile,
 }));
 console.log('medic + camp huts written');
