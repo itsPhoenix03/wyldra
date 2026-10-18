@@ -300,15 +300,29 @@ func TestIdleCrawlerHarassesFolk(t *testing.T) {
 	}
 }
 
-// Folk ride the cre frame; camps ride init.
+// Folk ride the cre frame, as far as the player can be told about them
+// (InterestRadius) and no farther; camps ride init.
 func TestFolkOnTheWire(t *testing.T) {
 	f := newFixture(t)
+	f.p.X, f.p.Y = f.r.folk[0].X, f.r.folk[0].Y
 	f.reset()
 	f.r.broadcastCre()
 	m := f.lastOfType("cre")
+	want := 0
+	for _, o := range f.r.folk {
+		if math.Hypot(o.X-f.p.X, o.Y-f.p.Y) <= InterestRadius {
+			want++
+		}
+	}
+	if want == 0 || want == len(f.r.folk) {
+		t.Fatalf("fixture: %d of %d folk in range, want some but not all", want, len(f.r.folk))
+	}
 	fl, ok := m["f"].([]any)
-	if !ok || len(fl) != len(f.r.folk) {
-		t.Fatalf("cre frame folk list: %#v", m["f"])
+	if !ok || len(fl) != want {
+		t.Fatalf("cre frame folk list: got %d rows, want the %d in range: %#v", len(fl), want, m["f"])
+	}
+	if m["r"] != InterestRadius {
+		t.Fatalf("cre frame radius %v, want %v", m["r"], InterestRadius)
 	}
 	row := fl[0].([]any)
 	if len(row) != 6 || row[0] != f.r.folk[0].ID || row[3] != f.r.folk[0].Kind {
@@ -316,5 +330,27 @@ func TestFolkOnTheWire(t *testing.T) {
 	}
 	if len(f.r.campsWire()) != len(f.r.camps) {
 		t.Fatal("campsWire dropped a camp")
+	}
+}
+
+// A client that is falling behind is skipped for the snapshot frame instead of
+// having it queued, and is not dropped for it.
+func TestCreSkipsBackloggedClient(t *testing.T) {
+	f := newFixture(t)
+	f.reset()
+	for i := 0; i < OutboundBuffer/2; i++ {
+		f.sess.Out <- []byte(`{"t":"filler"}`)
+	}
+	f.r.broadcastCre()
+	if f.lastOfType("cre") != nil {
+		t.Fatal("cre frame queued for a backlogged client")
+	}
+	if _, ok := f.r.players[f.sess.ID]; !ok {
+		t.Fatal("backlogged client was dropped")
+	}
+	f.reset()
+	f.r.broadcastCre()
+	if f.lastOfType("cre") == nil {
+		t.Fatal("no cre frame once the client caught up")
 	}
 }

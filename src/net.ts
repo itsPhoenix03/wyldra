@@ -44,6 +44,25 @@ export function identityToken(): string {
   return tok;
 }
 
+// A join requested ahead of time (boot.ts, the moment Play is pressed), so the ticket
+// round trip overlaps loading the atlases and the game chunk instead of following them.
+let early: { name: string; at: number; p: Promise<JoinTicket> } | null = null;
+/** Tickets live 30s (control/PROTOCOL.md); one older than this is re-requested rather than risked. */
+const EARLY_MAX_AGE_MS = 20_000;
+
+export function prefetchJoin(name: string) {
+  early = { name, at: Date.now(), p: requestJoin(name) };
+  early.p.catch(() => {}); // surfaced by takeJoin's caller, not as an unhandled rejection
+}
+
+/** The prefetched join if it is for `name` and still fresh, otherwise a new request. Single use. */
+export function takeJoin(name: string): Promise<JoinTicket> {
+  const e = early;
+  early = null;
+  if (e && e.name === name && Date.now() - e.at < EARLY_MAX_AGE_MS) return e.p;
+  return requestJoin(name);
+}
+
 /**
  * POST /api/join on the control plane. Resolves with the ticket + the game-server WS URL.
  * Rejects with a player-readable Error on any transport or protocol failure.

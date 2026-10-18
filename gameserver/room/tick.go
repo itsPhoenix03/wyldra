@@ -92,30 +92,61 @@ func (r *Room) onSimTick() {
 	r.broadcastCre()
 }
 
-// broadcastCre is the legacy per-tick `cre` frame: every creature and animal
-// position, plus the world clock the legacy server piggybacks on it. Both lists
-// are emitted in spawn order (creOrder / aniOrder) rather than map order, so a
-// client that diffs by array position sees a stable sequence.
+// InterestRadius is how far, in tiles, a player is told about creatures, animals
+// and folk in the per-tick `cre` frame (docs/10_GO_WIRE_PROTOCOL.md §6.1). The
+// view is ~22 tiles across, so this leaves a wide margin; everything farther is
+// left out, which keeps the frame small and the browser from parsing and
+// animating the whole world's population five times a second.
+const InterestRadius = 40.0
+
+// broadcastCre is the per-tick `cre` frame: every creature, animal and folk
+// position within InterestRadius of each player, plus the world clock the legacy
+// server piggybacks on it. Lists keep spawn order (creOrder / aniOrder) rather
+// than map order, so a client that diffs by array position sees a stable
+// sequence. A backlogged client is skipped: the next tick's frame replaces this one.
 func (r *Room) broadcastCre() {
 	if len(r.players) == 0 {
 		return
 	}
-	c := make([][]any, 0, len(r.creOrder))
+	type row struct {
+		x, y float64
+		w    []any
+	}
+	cre := make([]row, 0, len(r.creOrder))
 	for _, cr := range r.creOrder {
 		typ := cr.Type
 		if typ == "" {
 			typ = "crawler"
 		}
-		c = append(c, []any{cr.ID, toFixed(cr.X, 2), toFixed(cr.Y, 2), typ})
+		cre = append(cre, row{cr.X, cr.Y, []any{cr.ID, toFixed(cr.X, 2), toFixed(cr.Y, 2), typ}})
 	}
-	a := make([][]any, 0, len(r.aniOrder))
+	ani := make([]row, 0, len(r.aniOrder))
 	for _, an := range r.aniOrder {
-		a = append(a, []any{an.ID, toFixed(an.X, 2), toFixed(an.Y, 2), an.Type})
+		ani = append(ani, row{an.X, an.Y, []any{an.ID, toFixed(an.X, 2), toFixed(an.Y, 2), an.Type}})
 	}
-	r.broadcast(map[string]any{
-		"t": "cre", "c": c, "a": a, "f": r.folkWire(),
-		"time": toFixed(r.time, 4), "day": r.day,
-	})
+	folk := make([]row, 0, len(r.folk))
+	for _, w := range r.folkWire() {
+		folk = append(folk, row{w[1].(float64), w[2].(float64), w})
+	}
+	near := func(p *Player, rows []row) [][]any {
+		out := make([][]any, 0, len(rows))
+		for _, e := range rows {
+			if math.Hypot(e.x-p.X, e.y-p.Y) <= InterestRadius {
+				out = append(out, e.w)
+			}
+		}
+		return out
+	}
+	t, day := toFixed(r.time, 4), r.day
+	for _, p := range r.playerOrder {
+		if p.S.Backlogged() {
+			continue
+		}
+		r.send(p, map[string]any{
+			"t": "cre", "c": near(p, cre), "a": near(p, ani), "f": near(p, folk),
+			"time": t, "day": day, "r": InterestRadius,
+		})
+	}
 }
 
 // survivalTick is the legacy `tickN % 25` player block: hunger and thirst decay,

@@ -273,11 +273,15 @@ if (!sd) fail('workbench not demolished');
 if (A.state.inv.wood !== woodBefore + 4) fail(`refund wrong: ${woodBefore} -> ${A.state.inv.wood}`);
 console.log('demolition OK: refunded 4 wood, removal synced to B');
 
-// animals broadcast in sim tick — spawn is player-biased, so expect a population.
-// Assertions copied verbatim from the root test.mjs.
+// animals broadcast in sim tick — spawn is player-biased, so expect some near us.
+// The Go server only sends what is within `r` tiles of the player (docs/10 §6.1), so
+// the world-wide count the root test.mjs asserts is no longer visible on the wire.
 const cre = A.msgs.filter((m) => m.t === 'cre').pop();
 if (!cre || !Array.isArray(cre.a)) fail('no animal data in sim broadcast');
-if (cre.a.length < 3) fail('too few animals spawned: ' + cre.a.length);
+if (!(cre.r > 0)) fail('cre frame carries no interest radius: ' + cre.r);
+const far = cre.a.filter((a) => Math.hypot(a[1] - px, a[2] - (py + 1)) > cre.r + 1);
+if (far.length) fail(`cre frame sent ${far.length} animals beyond r=${cre.r}`);
+if (cre.a.length < 1) fail('no animals spawned near the player');
 console.log('animal sim OK (', cre.a.length, 'animals roaming:', [...new Set(cre.a.map(a => a[3]))].join(','), ')');
 
 // --- mining flow: gather materials, rebuild workbench, craft pick + mine entrance, descend, dig ---
@@ -434,6 +438,9 @@ console.log('E3 wear toggle off OK: wornGear =', wearInv2.wornGear);
 // (the same technique G5 uses) within a bounded budget and then fails. There is deliberately
 // no "no chit arrived, skipping" path: a test that cannot fail asserts nothing.
 let e4chit = null, e4sawCre = false;
+// creatures spawn around the Core and the cre frame only carries those within its radius
+// of us (docs/10 §6.1), so go where they are rather than waiting for one to walk over
+warp(A, CORE[0] + 16, CORE[1], 0); await sleep(300);
 const e4t0 = Date.now();
 while (!e4chit && Date.now() - e4t0 < 20000) {
   const latest = A.msgs.filter((m) => m.t === 'cre').pop();
@@ -934,6 +941,7 @@ console.log('G4 miss OK: act fired with no chit');
 // unarmed hit (dmg 1) never one-shots a fresh spawn (every CRE_TYPES hp floor is 2), but the
 // very first candidate may be one E4 already damaged above — so retry across candidates/spawns.
 let g5chit = null, g5seq = 9004;
+warp(A, CORE[0] + 16, CORE[1], 0); await sleep(300);   // into range of the Core's spawns (see E4)
 const g5t0 = Date.now();
 while (!g5chit && Date.now() - g5t0 < 10000) {
   const latest = A.msgs.filter((m) => m.t === 'cre').pop();

@@ -1,6 +1,6 @@
 # Project state — Wyldra
 
-**Last updated:** 2026-09-20 · branch `dev` · session dump:
+**Last updated:** 2026-10-18 · branch `dev` · session dump:
 `session-context-dump/2026-09-20_1700__modular-building.md`
 
 This is the status source of truth. Update it in the same pass as any session dump.
@@ -79,7 +79,13 @@ and `SAVE_PATH` swapped and point a copy of `test.mjs` at the new port.
 owner's real save and the legacy server owns that file. The Go server writes
 `gameserver/world.<worldId>.save.json`.
 
-Status at this update: **all of the above green.**
+Status at this update (2026-10-18): tsc, vite build, Go build/vet/test, worldparity,
+`test:control` and `test-multiworld.mjs` green. **`test-go.mjs` is red**, on two things
+unrelated to the asset/interest work: at `HEAD` (45adfeb) it fails at `DEVOK: exposed sand
+damaged the player with no weather`; past that, the MOD stage's wall at `mi + 1` is refused
+with `modfail why:node` (a resource node next to the chosen sand tile). Run the suites
+against a throwaway save dir (`HEARTH_SAVE_DIR`) and spare ports rather than deleting
+`gameserver/world*.save.json`.
 
 ---
 
@@ -166,12 +172,30 @@ over water and must stay moored to land; cutting a span drops the rest and stops
 swimming. Wire spec §12; `gameserver/room/modules.go`, `modules_test.go`, MOD stage of
 `test-go.mjs`.
 
+### Asset pipeline and streaming
+The browser never rasterises an SVG. `tools/atlas/build-atlases.mjs` (`npm run atlas`; run
+automatically by `npm start`, `npm run dev`, `npm run build`, cached by an input hash) bakes
+`src/assets.ts`'s manifest into PNG atlases in `assets/atlas/` plus `src/generated/atlas.json`
+(both gitignored). Packs (`PACK_OF`): `base` + `keeper` load before the scene starts
+(decoded off-thread with `createImageBitmap` while the menu is open); each NPC's clips are its
+own pack, streamed per island (`src/zones.ts`, ~110 tiles off the shore) or on demand when one
+walks into view. `src/atlas.ts` registers every frame as an alias texture of its atlas, so all
+the old string keys still work. Keeper skins: the build bakes one atlas per gear variant plus a
+shirt mask; other shirts are blended in `src/skinWorker.ts`. `assets/sw.js` caches `/atlas/`
+cache-first (names are content-hashed) and falls back to the network if Cache Storage fails.
+Join runs in parallel with loading (`net.ts prefetchJoin/takeJoin`).
+
+Server side, the per-tick `cre` frame only carries entities within 40 tiles of each player
+and is skipped for a client whose queue is half full (docs/10 §9.2.1).
+
 ### Dev tooling
 F9 kit and F10 panel, gated on the ticket's `dev` claim. `HEARTH_DEV_ALL=1` (set by
 `npm run start:dev`) grants it to **loopback requests only** — checked per-request, not on the
 bind address, because control binds `0.0.0.0` for LAN play. `HEARTH_DEV_TOKS` /
 `HEARTH_DEV_USERS` allowlist named accounts. **The claim is baked into the ticket at join, so
-you must reconnect after enabling it.**
+you must reconnect after enabling it.** A dev session also shows an FPS / frame-time / network
+meter (bottom-left), and the F10 panel's "Combat ranges + motion lines" toggle draws every
+player's and enemy's attack radius and heading (`src/devOverlay.ts`; radii mirror the Go server).
 
 ---
 
