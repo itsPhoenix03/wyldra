@@ -44,6 +44,8 @@ export interface FolkHost extends Phaser.Scene {
   needHuman(kind: string): void;
   /** The weather now blowing (server `wx`): null when the sky is clear. */
   weather: string | null;
+  /** The folk just spoke to or about the keeper (talk / scold / shun / weather / clear): they answer. */
+  keeperReply(topic: string, kind: string, afterMs?: number): void;
 }
 
 const NAMES: Record<string, string> = {
@@ -201,6 +203,7 @@ export class FolkView {
   private fireAt = new Set<number>();
   private spr = new Map<string, FolkSpr>();
   private bubbles = new Map<string, Phaser.GameObjects.Text>();
+  private greetAt = -1e9; // clock of the last greeting to the keeper, from anyone
   private lineIdx = new Map<string, number>();
   private clock = 0;
 
@@ -310,6 +313,8 @@ export class FolkView {
         if (sp.active && sp.visible) this.say(id, lines[(Math.random() * lines.length) | 0], 2800);
       });
     }
+    // the keeper answers once they have had their say
+    if (n) this.s.time.delayedCall(n * 900 + 400, () => this.s.keeperReply(kind ? "weather" : "clear", ""));
   }
   private lastWeather: string | null = null;
 
@@ -362,6 +367,7 @@ export class FolkView {
         sp.setData("shoutAt", this.clock);
         const lines = act === "shun" ? SHUN_SHOUTS : act === "shelter" ? STORM_SHOUTS[this.s.weather ?? ""] ?? SHOUTS : SHOUTS;
         this.say(id, lines[(Math.random() * lines.length) | 0], 1800);
+        if (act === "shun" && this.near(sp, 8)) this.s.keeperReply("shun", kind);
       }
     } else if (act === "sit") {
       const k = this.clip(sp, "sit");
@@ -376,13 +382,17 @@ export class FolkView {
         sp.setData("scoldAt", this.clock);
         const lines = SCOLDS[kind] && Math.random() < 0.6 ? SCOLDS[kind] : SCOLDS._;
         this.say(id, lines[(Math.random() * lines.length) | 0], 3000);
+        this.s.keeperReply("scold", kind, 3100);
       }
     } else {
       this.look(sp);
       if (prev === act) return; // only turned
-      if (act === "talk" && this.clock - sp.getData("talkAt") > 12 && this.near(sp, 3.2)) {
+      // one greeting at a time: a crowd round the keeper used to speak all at once
+      if (act === "talk" && this.clock - sp.getData("talkAt") > 12 && this.clock - this.greetAt > 4 && this.near(sp, 3.2)) {
+        this.greetAt = this.clock;
         sp.setData("talkAt", this.clock);
         this.say(id, this.nextLine(id, kind), 3600);
+        this.s.keeperReply("talk", kind, 3700); // once their bubble is gone: turns, not a pile-up
       } else if (act === "chat" && this.clock - sp.getData("chatAt") > 8 && this.near(sp, 10) && Math.random() < 0.55) {
         // overheard: one line, a beat after they turn to each other
         sp.setData("chatAt", this.clock);

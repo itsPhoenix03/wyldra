@@ -34,6 +34,7 @@ import { BOOT_PACKS, packBitmap } from "./atlasData.ts";
 import { PackLoader } from "./atlas.ts";
 import { zonesNear } from "./zones.ts";
 import { DevOverlay } from "./devOverlay.ts";
+import { KeeperVoice } from "./keeperVoice.ts";
 import { pickView, viewKey, type View } from "./facing.ts";
 import { ROTATABLE_MODS, facing, facingCount } from "./rotation.ts";
 import { TileStore, UNLOADED, CHUNK, type ChunkMsg } from "./tiles.ts";
@@ -410,6 +411,8 @@ class Hearth extends Phaser.Scene {
   packs!: PackLoader;
   private zoneCheckAt = 0;
   dev!: DevOverlay;
+  voice!: KeeperVoice; // the keeper's own speech bubble (src/keeperVoice.ts)
+  private ledgeCheckAt = 0;
 
   create() {
     activeScene = this;
@@ -425,6 +428,7 @@ class Hearth extends Phaser.Scene {
     this.registerBirdAnims();
     this.registerPopAnims();
     this.dev = new DevOverlay(this);
+    this.voice = new KeeperVoice(this);
     // Task 5: player display name
     const urlName = new URLSearchParams(location.search).get("name");
     if (urlName) {
@@ -730,11 +734,32 @@ class Hearth extends Phaser.Scene {
     const V = { n: [32, 0], e: [64, 16], s: [32, 32], w: [0, 16] } as const;
     for (const [key, a, b] of [["ne", V.n, V.e], ["es", V.e, V.s], ["sw", V.s, V.w], ["wn", V.w, V.n]] as const) {
       if (this.textures.exists(`lip-${key}`)) continue;
-      // pull the edge 1.5px in toward the centre so it sits on the top face, not the skirt
-      const ix = (p: readonly number[]) => p[0] + (32 - p[0]) * 0.06, iy = (p: readonly number[]) => p[1] + (16 - p[1]) * 0.1;
+      // Worn, crumbling ground rather than a marker: earth tones at low alpha so the
+      // biome shows through. The edge darkens toward the drop like ground falling away,
+      // a faint pale rim catches the light on the lip, and loose pebbles sit at the brink.
+      // n is the screen-space unit vector from the edge in toward the tile's centre.
+      const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+      const nl0 = Math.hypot(32 - mx, 16 - my), nx = (32 - mx) / nl0, ny = (16 - my) / nl0;
+      const at = (t: number, off: number): [number, number] => [a[0] + (b[0] - a[0]) * t + nx * off, a[1] + (b[1] - a[1]) * t + ny * off];
       const g = this.make.graphics({}, false);
-      g.lineStyle(5, 0x2a1608, 0.6).lineBetween(ix(a), iy(a), ix(b), iy(b));
-      g.lineStyle(2.4, 0xffc95e, 1).lineBetween(ix(a), iy(a), ix(b), iy(b));
+      for (let k = 0; k < 6; k++) { // shadow fading in from the brink
+        const [x0, y0] = at(0.06, 0.8 + k), [x1, y1] = at(0.94, 0.8 + k);
+        g.lineStyle(1.4, 0x2b1d10, 0.4 * (1 - k / 6)).lineBetween(x0, y0, x1, y1);
+      }
+      // the broken brink: short uneven dark runs, not a ruled line
+      for (const [t0, t1] of [[0.07, 0.24], [0.28, 0.46], [0.5, 0.63], [0.67, 0.93]] as const) {
+        const [x0, y0] = at(t0, 0.5), [x1, y1] = at(t1, 0.5);
+        g.lineStyle(1.6, 0x3a2614, 0.55).lineBetween(x0, y0, x1, y1);
+      }
+      {
+        const [x0, y0] = at(0.1, 1.6), [x1, y1] = at(0.9, 1.6);
+        g.lineStyle(1, 0xf4e7c8, 0.4).lineBetween(x0, y0, x1, y1);
+      }
+      for (const [t, off, r] of [[0.16, 3.0, 1.2], [0.34, 4.2, 0.9], [0.5, 2.6, 1.3], [0.67, 3.9, 1], [0.85, 3.1, 1.1]] as const) {
+        const [px, py] = at(t, off);
+        g.fillStyle(0x4f3d2a, 0.7).fillCircle(px, py, r);
+        g.fillStyle(0xe9dcbc, 0.45).fillCircle(px - 0.35, py - 0.35, r * 0.45);
+      }
       g.generateTexture(`lip-${key}`, 64, 40);
       g.destroy();
     }
@@ -897,6 +922,25 @@ class Hearth extends Phaser.Scene {
   private onPackInstalled(pack: string) {
     this.registerHumanAnims(pack);
     if (pack !== "base" && pack !== KEEPER_PACK) this.folk.refreshKind(pack);
+  }
+
+  /** FolkHost: the folk just spoke to or about the keeper — the keeper answers (keeperVoice.ts). */
+  keeperReply(topic: string, kind: string, afterMs?: number) {
+    this.voice.reply(topic, kind, afterMs);
+  }
+
+  /**
+   * The keeper stands within reach of a ledge lip on their own tile: the edge they
+   * would fall over. Lip edges map to neighbours as in lipsAt (ne: y-1, es: x+1,
+   * sw: y+1, wn: x-1); "within reach" is under half a tile from that edge.
+   */
+  private atLedge(): boolean {
+    const x = this.px | 0, y = this.py | 0, fx = this.px - x, fy = this.py - y;
+    for (const lip of this.lipsAt(x, y)) {
+      const d = lip === "lip-ne" ? fy : lip === "lip-es" ? 1 - fx : lip === "lip-sw" ? 1 - fy : fx;
+      if (d < 0.45) return true;
+    }
+    return false;
   }
 
   /** FolkHost: a folk member of `kind` is in view, so its clips are needed now. */
@@ -1711,7 +1755,10 @@ class Hearth extends Phaser.Scene {
       // Task 4: wornGear from inv update
       this.wornGear = m.wornGear ?? null;
       this.armorOn = m.armor === true;
-    } else if (m.t === "msg") showMsg(m.s);
+    } else if (m.t === "msg") {
+      showMsg(m.s);
+      if (/fell hard/i.test(m.s)) this.voice.fell();
+    }
     else if (m.t === "medicOffer") {
       this.medicOffer = m.offer
         ? {
@@ -3229,6 +3276,11 @@ class Hearth extends Phaser.Scene {
     this.updateVegetationSway(dt);
     this.updateFlicker(dt);
 
+    this.voice.tick();
+    if (t >= this.ledgeCheckAt) {
+      this.ledgeCheckAt = t + 250;
+      if (this.z === 0 && !this.sailing && !this.swimming && this.atLedge()) this.voice.nearLedge();
+    }
     // Task 5: update self label position
     if (this.meLabel) {
       this.meLabel

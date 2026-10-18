@@ -197,7 +197,10 @@ Weather: a sandstorm sends the whole Dunes village in, a snowstorm the Spire, ra
 Marsh children (`shelter` then `hide`; `folk_weather.go`, docs/10 §13.5).
 
 ### Movement: ledges and the mine exit
-Fall damage is per ledge crossed (`fallDrop`), and the client draws a gold lip on every 2+ drop edge.
+Fall damage is per ledge crossed (`fallDrop`), and the client draws a worn, crumbling lip on every 2+ drop edge.
+The keeper has a voice (`src/keeperVoice.ts`, client-only): it explains a ledge the first time you
+reach one, reacts to a fall, and answers the folk — greetings, scolding, shunning, weather — taking
+turns with them (one villager greets at a time).
 Surfacing from a mine lands on open ground by the shaft (`surfaceExit`), and a step within your
 own tile is never blocked (client + server), so nobody can be walled into a blocked tile. docs/10 §5.
 

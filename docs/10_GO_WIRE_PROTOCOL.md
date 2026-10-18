@@ -218,7 +218,7 @@ server-authoritative movement work:
   measured tile edge by tile edge along the step (`fallDrop`), taking the gentler of the two
   axis-by-axis routes, not between the step's two end tiles: a ~0.4-tile update can cross two
   edges at once, and a diagonal down a 1-level staircase (3 → 2 → 1) used to read as a fall.
-  Landing in water never hurts. The client draws a gold **ledge lip** on every tile edge that is
+  Landing in water never hurts. The client draws a worn, crumbling **ledge lip** (earth-toned shadow, broken brink, pebbles) on every tile edge that is
   such a drop (`makeLipTextures` / `lipsAt`) — including the back edges the iso view has no
   cliff face for.
 
