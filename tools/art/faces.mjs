@@ -19,6 +19,9 @@
 // Idempotent: a restyled file carries a marker and is skipped. Run it BEFORE
 // tools/art/keeper-frames.mjs (which copies the keeper's face into the derived
 // clips) and again after it — the second run only touches unmarked files.
+//
+// Superseded by tools/art/faces-aplus.mjs: files carrying its marker already have
+// the A+ face and are skipped here too.
 
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -97,17 +100,16 @@ function features(char, { skin, line, hair }) {
 
 // brow colour per character, read from its base art (brows are drawn in hair colour)
 const BROW = /<path d="M11\.3 14Q13 13 14\.8 13\.5M17\.2 13\.5Q19 13 20\.7 14" fill="none" stroke="(#[0-9a-f]{6})"/i;
-const hairOf = {};
-for (const c of CHARS) {
+const hairOf = (c) => {
   const m = readFileSync(`${SPR}/${c}.svg`, 'utf8').match(BROW);
   if (!m) throw new Error(`${c}: base brows not found`);
-  hairOf[c] = m[1];
-}
+  return m[1];
+};
 
 function restyle(src, char) {
   const head = src.match(HEAD), gloss = src.match(GLOSS);
   if (!head || !gloss || !BLUSH.test(src)) throw new Error('face anchors missing');
-  const [, skin, line] = head, light = gloss[1], hair = hairOf[char];
+  const [, skin, line] = head, light = gloss[1], hair = hairOf(char);
   const lip = mix(line, '#5a2f28', .45);
   let s = src;
   s = s.replace(GLOSS, modelling(skin, line, light));
@@ -138,7 +140,7 @@ for (const f of readdirSync(SPR)) {
   const char = CHARS.find((c) => name === c || new RegExp(`^${c}_[a-z]+_\\d\\d$`).test(name));
   if (!char) continue;
   const src = readFileSync(`${SPR}/${f}`, 'utf8');
-  if (src.includes(MARK)) { skipped++; continue; }
+  if (src.includes(MARK) || src.includes('<!--face:aplus-->')) { skipped++; continue; }
   writeFileSync(`${SPR}/${f}`, restyle(src, char));
   done++;
 }

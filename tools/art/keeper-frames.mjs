@@ -32,6 +32,7 @@
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { express } from './faces-aplus.mjs';
 
 const SPR = resolve(dirname(fileURLToPath(import.meta.url)), '../../assets/sprites');
 const read = (n) => readFileSync(`${SPR}/${n}.svg`, 'utf8');
@@ -49,11 +50,11 @@ const VILLAGER_TO_KEEPER = {
   '#3b3028': '#382e29', // boots + belt
   '#80634a': '#456d89', // shirt + sleeves
   '#d0b27b': '#a9c4c4', // shirt sheen
-  '#896248': '#885d47', // skin outline
-  '#bf8b63': '#bf865f', // skin
-  '#e1b18b': '#e5af80', // skin highlight
+  '#896248': '#8a5a42', // skin outline
+  '#bf8b63': '#d39a6e', // skin
+  '#e1b18b': '#f0c79c', // skin highlight
 };
-const NECK = /<path d="M ?14 +22h ?4v ?3h ?-4Z"/;
+const NECK = /<path d="M ?14 +22h ?4v ?3(?:\.2)?h ?-4Z"/;
 const PROP = /<g transform="translate\([^)]*\) rotate\(\s*-?[\d.]+\s*\)">[\s\S]*?<\/g>/;
 const keeperBase = read('keeper');
 const keeperTail = keeperBase.slice(keeperBase.search(NECK), keeperBase.lastIndexOf('</svg>')).trimEnd();
@@ -100,9 +101,9 @@ const ARM = (ex, ey, hx, hy) => {
   const fo = `M${r2(ex)} ${r2(ey)}Q${r2((ex + hx) / 2)} ${r2((ey + hy) / 2)} ${r2(hx)} ${r2(hy)}`;
   return `<path d="${up}" fill="none" stroke="#433d38" stroke-width="4.6" stroke-linecap="round"/>` +
     `<path d="${up}" fill="none" stroke="#456d89" stroke-width="3.9" stroke-linecap="round"/>` +
-    `<path d="${fo}" fill="none" stroke="#885d47" stroke-width="3.5" stroke-linecap="round"/>` +
-    `<path d="${fo}" fill="none" stroke="#bf865f" stroke-width="2.8" stroke-linecap="round"/>` +
-    `<ellipse cx="${r2(hx)}" cy="${r2(hy)}" rx="1.6" ry="2" fill="#e5af80" stroke="#885d47" stroke-width=".4"/>`;
+    `<path d="${fo}" fill="none" stroke="#8a5a42" stroke-width="3.5" stroke-linecap="round"/>` +
+    `<path d="${fo}" fill="none" stroke="#d39a6e" stroke-width="2.8" stroke-linecap="round"/>` +
+    `<ellipse cx="${r2(hx)}" cy="${r2(hy)}" rx="1.6" ry="2" fill="#f0c79c" stroke="#8a5a42" stroke-width=".4"/>`;
 };
 /** Arm drawn on the image left (unmirrored group), elbow/hand in image space. */
 const armLeft = (e, h) => `<g>${ARM(e[0], e[1], h[0], h[1])}</g>`;
@@ -164,10 +165,6 @@ const SPRIG = // a pulled handful: two leaves on a stem, drawn around the hand
   '<path d="M0 0Q-.6-2.6 .8-4.4" fill="none" stroke="#5a7a34" stroke-width=".7"/>' +
   '<path d="M.6-3.6Q3-5.6 4-3.2Q2-2.2.6-3.6Z" fill="#7fae4e" stroke="#3f5e27" stroke-width=".4"/>' +
   '<path d="M.2-2.2Q-2.6-3.8-3.4-1.4Q-1.4-.6.2-2.2Z" fill="#6c9a42" stroke="#3f5e27" stroke-width=".4"/>';
-
-const SMILE = /<path d="M14\.1 21Q16 21\.6 17\.9 21"[^>]*\/>/;
-const OPEN_MOUTH = '<path d="M15 20.7Q16 20.1 17 20.7Q17.5 22 16 22.4Q14.5 22 15 20.7Z" fill="#74493d"/>' +
-  '<path d="M15.3 21Q16 21.3 16.7 21" fill="none" stroke="#dda482" stroke-width=".4"/>';
 
 const SHOULDER_L = [10, 25], SHOULDER_R = [22, 25];
 const ease = (t) => t * t * (3 - 2 * t);
@@ -296,7 +293,7 @@ for (const f of frames('keeper_swim')) {
 const quietArms = (ox, oy, sw = 0) =>
   armLeft([7.6 - ox * 0.5 + sw * 0.3, 30.3 + oy * 0.5], [7.5 - ox + sw * 0.6, 35.4 + oy]) +
   armRight([24.4 + ox * 0.5 - sw * 0.3, 30.3 + oy * 0.5], [24.5 + ox - sw * 0.6, 35.4 + oy]);
-const headFor = (open) => (open ? CALM_HEAD.replace(SMILE, OPEN_MOUTH) : CALM_HEAD);
+const headFor = (open) => (open ? express(CALM_HEAD, { mouth: 'open' }) : CALM_HEAD);
 
 // standing jump: straight up — deep crouch, both feet leave together and tuck
 // evenly, then a soft two-footed landing.

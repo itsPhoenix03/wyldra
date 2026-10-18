@@ -39,16 +39,42 @@ const rad = (d) => (d * Math.PI) / 180;
 
 // ── characters: template palette + what makes each one themselves ──────────
 const CHARS = {
-  keeper:         { walk: 8, legs: '#394454', boots: '#382e29', shirt: '#456d89', sheen: '#a9c4c4', skin: '#bf865f', skinO: '#885d47', skinH: '#e5af80', hair: '#4b3028', hairStyle: 'short', gear: true },
-  villager:       { walk: 9, legs: '#534738', boots: '#3b3028', shirt: '#80634a', sheen: '#d0b27b', skin: '#bf8b63', skinO: '#896248', skinH: '#e1b18b', hair: '#4b382d', hairStyle: 'short', hat: true, beard: '#6f6154', prop: 'bundle' },
+  keeper:         { walk: 8, legs: '#394454', boots: '#382e29', shirt: '#456d89', sheen: '#a9c4c4', skin: '#d39a6e', skinO: '#8a5a42', skinH: '#f0c79c', hair: '#3b2620', hairHl: '#9a6a4a', hairStyle: 'swept', gear: true },
+  villager:       { walk: 9, legs: '#534738', boots: '#3b3028', shirt: '#80634a', sheen: '#d0b27b', skin: '#bf8b63', skinO: '#896248', skinH: '#e1b18b', hair: '#4b382d', hairStyle: 'short', hat: true, prop: 'bundle' },
   villager2:      { walk: 9, legs: '#51404b', boots: '#3c3031', shirt: '#795668', sheen: '#d6a69a', skin: '#c89570', skinO: '#946b52', skinH: '#ecc7a2', hair: '#4c3229', hairStyle: 'long', lock: '#5d4031', apron: '#84586a', apronLine: '#a7747e' },
   woods_child:    { walk: 8, frontWalk: true, legs: '#625344', boots: '#44382c', shirt: '#50865d', sheen: '#b2ba79', skin: '#bb8960', skinO: '#825a44', skinH: '#e3b083', hair: '#6b462d', hairStyle: 'tousled', collar: '#b1bc7a', prop: 'stick' },
   ashmark_hunter: { walk: 8, frontWalk: true, legs: '#534637', boots: '#302b25', shirt: '#66553e', sheen: '#923c2d', skin: '#ab7452', skinO: '#75503c', skinH: '#d49e71', hair: '#292824', hairStyle: 'short', scarf: '#963d2f', hide: '#574b37', pouch: '#4b3c2b', prop: 'spear' },
-  elder_yvenne:   { walk: 8, frontWalk: true, legs: '#48554d', boots: '#303933', shirt: '#356158', sheen: '#93a77d', skin: '#a47256', skinO: '#6d4a3d', skinH: '#c89470', hair: '#d2c8b5', hairStyle: 'long', lock: '#c3b9aa', robe: '#63856c', robeLine: '#a8b492', prop: 'staff', elder: true },
+  elder_yvenne:   { walk: 8, frontWalk: true, legs: '#48554d', boots: '#303933', shirt: '#356158', sheen: '#93a77d', skin: '#a47256', skinO: '#6d4a3d', skinH: '#c89470', hair: '#d2c8b5', hairStyle: 'long', lock: '#c3b9aa', robe: '#63856c', robeLine: '#a8b492', prop: 'staff' },
   // medics: the long coat's sleeves are the arms' sleeves, so `shirt` is the coat colour
-  medic:          { walk: 0, legs: '#5b5747', boots: '#49392d', shirt: '#e3d9be', sheen: '#4f8b6f', skin: '#aa744e', skinO: '#76523d', skinH: '#d7a177', hair: '#414b3c', hairStyle: 'short', beard: '#6f685e', coat: '#e3d9be', coatLine: '#a99d85', strap: '#8b6c4c', bag: '#785b3f', bagMark: '#e9e4c8', trim: '#6e9b77' },
-  medic_snow:     { walk: 0, legs: '#596976', boots: '#3c4950', shirt: '#b5d3dd', sheen: '#5d95ae', skin: '#b88764', skinO: '#835e48', skinH: '#e3b48d', hair: '#444f57', hairStyle: 'short', coat: '#b5d3dd', coatLine: '#7199a8', collarV: '#eaf1ed', strap: '#8b6c4c', bag: '#785b3f', bagMark: '#edf4ef', hood: '#dce8e8', hoodLine: '#779bac', flush: '#b5584a' },
+  medic:          { walk: 0, legs: '#5b5747', boots: '#49392d', shirt: '#e3d9be', sheen: '#4f8b6f', skin: '#aa744e', skinO: '#76523d', skinH: '#d7a177', hair: '#414b3c', hairStyle: 'short', coat: '#e3d9be', coatLine: '#a99d85', strap: '#8b6c4c', bag: '#785b3f', bagMark: '#e9e4c8', trim: '#6e9b77' },
+  medic_snow:     { walk: 0, legs: '#596976', boots: '#3c4950', shirt: '#b5d3dd', sheen: '#5d95ae', skin: '#b88764', skinO: '#835e48', skinH: '#e3b48d', hair: '#444f57', hairStyle: 'short', coat: '#b5d3dd', coatLine: '#7199a8', collarV: '#eaf1ed', strap: '#8b6c4c', bag: '#785b3f', bagMark: '#edf4ef', hood: '#dce8e8', hoodLine: '#779bac' },
 };
+
+/** Face colours and traits read from the character's A+ front art (tools/art/faces-aplus.mjs),
+ *  so the side view's eye, brows, lips and marks match the front. */
+function faceOf(name) {
+  const s = read(name);
+  const pick = (re) => s.match(re)?.[1] ?? null;
+  const maleLip = pick(/<path d="M14\.4 21\.35Q16 21\.8 17\.6 21\.35" fill="none" stroke="(#[0-9a-f]{6})"/);
+  const f = {
+    iris: pick(/<circle cx="13\.1" cy="16\.35" r="1" fill="(#[0-9a-f]{6})"/),
+    lid: pick(/<path d="M14\.9 16\.6Q13\.1 14\.4 11\.15 16\.1" fill="none" stroke="(#[0-9a-f]{6})"/),
+    under: pick(/<path d="M14\.1 17\.25Q12\.9 17\.75 11\.7 16\.9" fill="none" stroke="(#[0-9a-f]{6})"/),
+    brow: pick(/<path d="M14\.8 13\.3Q12\.8 12\.1 11\.1 13\.4[^"]*" fill="(#[0-9a-f]{6})"/),
+    lip: maleLip ?? pick(/<path d="M14\.4 21\.3Q15\.3[^"]*" fill="(#[0-9a-f]{6})"/),
+    lipLow: maleLip ? pick(/<path d="M15\.2 22\.05[^"]*" fill="none" stroke="(#[0-9a-f]{6})"/) : pick(/<path d="M14\.6 21\.4Q16 22\.5[^"]*" fill="(#[0-9a-f]{6})"/),
+    lips: !maleLip,                                                       // drawn as filled lips
+    lash: s.includes('<path d="M11.35 16.2L10.8 15.8"'),
+    crease: s.includes('<path d="M14.4 15.3Q13.1 14.3 11.5 15.2"'),
+    freckles: pick(/<circle cx="12\.4" cy="18\.3" r="\.17" fill="(#[0-9a-f]{6})"/),
+    stubble: pick(/<path d="M10\.3 19Q10\.8 22[^"]*" fill="(#[0-9a-f]{6})"/),
+    age: pick(/<path d="M10\.5 15\.5L9\.7 15\.1[^"]*" fill="none" stroke="(#[0-9a-f]{6})"/),
+    paint: pick(/<path d="M10\.8 18\.6H12\.8[^"]*" stroke="(#[0-9a-f]{6})"/),
+  };
+  if (!f.iris || !f.lid || !f.under || !f.brow || !f.lip || !f.lipLow) throw new Error(`${name}: A+ face not found in front art`);
+  return f;
+}
+for (const [name, c] of Object.entries(CHARS)) c.face = faceOf(name);
 
 /** Root tag (and the child's scale wrapper) copied from the character's own art. */
 function frameOf(name) {
@@ -230,9 +256,54 @@ function sideWear(c) {
   return s;
 }
 
+/** The A+ face in profile: almond eye with a coloured iris and catchlight, tapered brow,
+ *  lips, and the character's own marks — all coloured from its front art (c.face). */
+function sideFace(c, face) {
+  const f = c.face;
+  // upper lid height: lower = more closed (the iris is clipped by the eye white)
+  const lid = { grit: 15.4, chatter: 15.75 }[face] ?? 14.95;
+  const white = `M20.3 16.45Q21.3 ${lid} 22.6 15.95Q21.6 17.3 20.3 16.45Z`;
+  let s = face === 'wince'
+    ? `<path d="M20.5 15.75L22.35 16.4L20.6 17.05" fill="none" stroke="${f.lid}" stroke-width=".6" stroke-linecap="round" stroke-linejoin="round"/>`
+    : `<clipPath id="se"><path d="${white}"/></clipPath><path d="${white}" fill="#f4eadb"/>` +
+      `<g clip-path="url(#se)"><circle cx="21.75" cy="16.2" r=".9" fill="${f.iris}"/><circle cx="21.85" cy="16.2" r=".47" fill="#15181a"/><circle cx="21.45" cy="15.8" r=".3" fill="#fff"/></g>` +
+      `<path d="M20.1 16.55Q21.3 ${r2(lid - .1)} 22.75 15.85" fill="none" stroke="${f.lid}" stroke-width=".65" stroke-linecap="round"/>` +
+      `<path d="M20.7 16.95Q21.6 17.25 22.4 16.75" fill="none" stroke="${f.under}" stroke-width=".3"/>`;
+  if (f.lash) s += `<path d="M20.2 16.5L19.65 16.1M20.55 16L20.15 15.55" fill="none" stroke="${f.lid}" stroke-width=".45" stroke-linecap="round"/>`;
+  if (f.crease && face !== 'wince') s += `<path d="M20.5 15.35Q21.4 14.7 22.4 15.2" fill="none" stroke="${c.skinO}" stroke-width=".3" opacity=".7"/>`;
+  // brow: thick at the front (over the nose), tapering back; women's a touch finer
+  const [y0, qy, y1, by1, bqy, by0] = { grit: [13.9, 12.55, 13.4, 13.7, 13.25, 14.45], wince: [12.9, 12.25, 13.8, 14.1, 13, 13.5] }[face]
+    ?? [13.4, 12.35, 13.5, 13.8, 13.05, 14];
+  const t = f.lips ? .08 : 0;
+  s += `<path d="M22.9 ${y0}Q21.4 ${qy} 19.9 ${y1}L20 ${r2(by1 - t)}Q21.4 ${r2(bqy - t)} 22.85 ${r2(by0 - t)}Z" fill="${f.brow}"/>`;
+  // nose tip light and nostril
+  s += `<ellipse cx="24.05" cy="17.3" rx=".45" ry=".3" fill="${c.skinH}" opacity=".65"/><circle cx="23.45" cy="18" r=".22" fill="${c.skinO}" opacity=".7"/>`;
+  // mouth
+  if (face === 'open')
+    s += `<path d="M21.85 20.95Q22.75 20.7 23.1 21.25Q22.6 22.15 21.85 21.65Q21.6 21.2 21.85 20.95Z" fill="#4a2420" stroke="${f.lip}" stroke-width=".3"/>`;
+  else if (face === 'chatter')
+    s += `<path d="M21.6 20.9H23.15L23.05 21.85H21.75Z" fill="#f3e6d2" stroke="${f.lip}" stroke-width=".38" stroke-linejoin="round"/><path d="M22.1 20.95V21.8M22.6 20.95V21.8" stroke="${f.lip}" stroke-width=".2"/>`;
+  else if (face === 'grit' || face === 'wince')
+    s += `<path d="M21.6 21.2H23.15" stroke="${f.lip}" stroke-width=".6" stroke-linecap="round"/><path d="M21.6 21.2l-.25.22" stroke="${f.lip}" stroke-width=".32" stroke-linecap="round"/>`;
+  else if (f.lips)
+    s += `<path d="M21.7 21.05Q22.3 20.75 22.7 20.95Q23 20.85 23.25 21.05Q22.5 21.3 21.7 21.05Z" fill="${f.lip}"/><path d="M21.85 21.15Q22.6 21.95 23.15 21.15Q22.5 21.4 21.85 21.15Z" fill="${f.lipLow}"/>`;
+  else
+    s += `<path d="M21.75 21.1Q22.45 21.4 23.15 21.05" fill="none" stroke="${f.lip}" stroke-width=".55" stroke-linecap="round"/><path d="M21.75 21.1l-.22-.18" stroke="${f.lip}" stroke-width=".32" stroke-linecap="round"/>` +
+      `<path d="M22.15 21.75Q22.6 21.9 23 21.72" fill="none" stroke="${f.lipLow}" stroke-width=".35" stroke-linecap="round" opacity=".75"/>`;
+  // what each life has left on the face, as in the front art
+  if (f.freckles) s += [[20.2, 18.5], [21, 18.9], [20.5, 19.35]].map(([x, y]) => `<circle cx="${x}" cy="${y}" r=".17" fill="${f.freckles}" opacity=".6"/>`).join('');
+  if (f.stubble)
+    s += `<path d="M16.6 20.2Q17.2 23.2 19.8 24Q22.4 24.2 23.4 21.6L23.4 20.6Q22.4 21.5 21.2 21.3Q19.6 21.2 18.6 20.4Q17.6 19.8 16.6 20.2Z" fill="${f.stubble}" opacity=".24"/>` +
+      `<path d="M21.6 20.55Q22.6 20.25 23.45 20.6L23.4 20.9Q22.6 20.6 21.7 20.9Z" fill="${f.stubble}" opacity=".4"/>` +
+      [[18.2, 21.6], [19.4, 22.6], [20.8, 23.2], [22.2, 22.8]].map(([x, y]) => `<circle cx="${x}" cy="${y}" r=".18" fill="${f.stubble}" opacity=".45"/>`).join('');
+  if (f.age)
+    s += `<path d="M19.6 15.4L18.9 15.1M19.6 16.4L18.9 16.7M19.6 11.2Q21 10.8 22.6 11.3M19.9 12.1Q21.1 11.8 22.4 12.2M22.4 19.6Q21.5 20.5 21.8 21.6" fill="none" stroke="${f.age}" stroke-width=".3" opacity=".6"/>`;
+  if (f.paint) s += `<path d="M19.6 18.6H21.4M19.8 19.6H21.6" stroke="${f.paint}" stroke-width=".55" stroke-linecap="round"/>`;
+  return s;
+}
+
 /** face: 'calm' | 'open' (mouth) | 'grit' (brow down, jaw set) | 'wince' (eye shut) | 'chatter' (teeth). */
 const sideHead = (c, face = 'calm') => {
-  const open = face === 'open';
   const hl = mix(c.hair, 255, .22), lo = mix(c.hair, 0, .25);
   let s = '';
   // long hair falls behind the shoulders — drawn under the head
@@ -243,22 +314,10 @@ const sideHead = (c, face = 'calm') => {
     // cheek and jaw shading, brow light
     `<path d="M14.6 22.4Q17.4 24.2 20.6 23.2Q22.4 22.4 22.8 20.6Q20.6 22.4 17.6 22.2Q15.6 22.2 14.6 22.4Z" fill="${c.skinO}" opacity=".3"/>` +
     `<path d="M18.6 9.8Q21.6 10.2 22.6 13" fill="none" stroke="${c.skinH}" stroke-width=".7" opacity=".35"/>` +
-    `<ellipse cx="20.4" cy="18.6" rx="1.6" ry=".8" fill="${c.skinO}" opacity=".18"/>` +
-    // eye, brow, nose line, mouth
-    (face === 'wince'
-      ? `<path d="M20.5 16.2Q21.4 16.9 22.4 16.1" fill="none" stroke="#2b221c" stroke-width=".45" stroke-linecap="round"/>`
-      : `<path d="M20.4 16.3Q21.4 15.6 22.4 16.1" fill="#ece0cc" stroke="${c.skinO}" stroke-width=".3"/><circle cx="21.65" cy="16.15" r=".55" fill="#2b221c"/><circle cx="21.45" cy="15.95" r=".1" fill="#fff5dc" opacity=".55"/>`) +
-    `<path d="${face === 'grit' ? 'M20 13.5Q21.5 13.7 22.9 14.6' : face === 'wince' ? 'M20 13.6Q21.4 13 22.9 14' : 'M20 14.1Q21.4 13.4 22.9 13.9'}" fill="none" stroke="${c.elder ? '#d8d0bf' : mix(c.hair, 0, .1)}" stroke-width="${face === 'grit' ? '.7' : '.55'}" stroke-linecap="round" opacity=".9"/>` +
-    `<path d="M23.4 17.8 22.5 18.1" stroke="${c.skinO}" stroke-width=".35"/>` +
-    (open ? `<path d="M21.7 20.4Q22.7 20.4 23 21.2Q22.2 21.8 21.6 21.2Z" fill="#74493d"/>`
-      : face === 'chatter' ? `<path d="M21.5 20.5H23.1L23 21.4H21.6Z" fill="#f1dec6" stroke="${c.skinO}" stroke-width=".35"/>`
-      : face === 'grit' ? `<path d="M21.4 21.1 23.1 20.8" fill="none" stroke="${mix(c.skinO, 0, .2)}" stroke-width=".6" stroke-linecap="round"/>`
-      : `<path d="M21.6 20.9Q22.4 21.2 23.1 20.8" fill="none" stroke="${mix(c.skinO, 0, .15)}" stroke-width=".5" stroke-linecap="round"/>`) +
+    `<ellipse cx="20.8" cy="19.2" rx="1.25" ry=".65" fill="#e07a66" opacity=".32"/>` +
+    sideFace(c, face) +
     // ear
     `<path d="M15.2 15.8Q13.8 15.4 13.9 17.6Q14.1 19.6 15.8 19.8Q16.6 18 16.2 16.2Z" fill="${c.skin}" stroke="${c.skinO}" stroke-width=".5"/><path d="M15 16.8Q14.6 17.8 15.4 18.8" fill="none" stroke="${c.skinO}" stroke-width=".3"/>`;
-  if (c.elder) s += `<path d="M19.4 12.2Q21 11.8 22.6 12.4M19.8 19.6Q20.8 21 22 21.8" fill="none" stroke="${c.skinO}" stroke-width=".3" opacity=".5"/>`;
-  if (c.beard)
-    s += `<path d="M16.4 20.2Q17 23.4 19.8 24.4Q22.6 24.4 23.6 21.8L23.4 20.4Q22.6 21.6 21.4 21.4Q19.6 21.6 18.6 20.4Q17.4 19.6 16.4 20.2Z" fill="${c.beard}" opacity=".95"/><path d="M21.4 20.4Q22.6 20.2 23.4 20.6" fill="none" stroke="${c.beard}" stroke-width=".7"/>`;
   // hair cap over the crown and the back of the head, sideburn in front of the ear
   if (c.hairStyle === 'long')
     s += `<path d="M9.2 15.4Q8.6 5.4 16.6 5.2Q23.6 5.4 23.8 12.4Q21.6 9.6 18.6 9.8Q17.6 12.8 16.8 15.4Q15.4 14.8 14.4 15.2L13.6 21Q10.4 20.6 9.2 15.4Z" fill="${c.hair}" stroke="${lo}" stroke-width=".45"/>` +
@@ -271,11 +330,13 @@ const sideHead = (c, face = 'calm') => {
     s += `<path d="M9.3 15.2Q8.8 5.8 16.4 5.6Q22.6 5.6 23.6 11.8Q21.4 9.8 19 10.2Q18.4 12.6 17.2 14.8Q15.8 14.6 14.8 15.2L14 19Q11.6 19.4 10.4 18Q9.4 17 9.3 15.2Z" fill="${c.hair}" stroke="${lo}" stroke-width=".45"/>` +
       `<path d="M11.4 9.8Q15 6.8 19.4 7.6" fill="none" stroke="${hl}" stroke-width=".6" opacity=".5"/>` +
       `<path d="M10.2 15.8Q11.8 17.6 13.8 17.4" fill="none" stroke="${lo}" stroke-width=".5" opacity=".6"/>`;
+  if (c.hairStyle === 'swept') // the keeper's fringe, swept forward over the brow
+    s += `<path d="M17.8 6.4Q21.8 6 23.7 9.6Q24.1 11.2 23.5 12.6Q22.6 10.9 21 10.4Q20.4 11.8 19.2 12.4Q19.7 10.9 19.1 9.6Q18.4 10.8 17.2 11.2Q18.2 9 17.8 6.4Z" fill="${c.hair}"/>` +
+      `<path d="M18.4 7Q21.2 6.8 22.9 9.2M19.4 9.4Q20.3 10.5 20.4 11.6" fill="none" stroke="${c.hairHl}" stroke-width=".45" stroke-linecap="round" opacity=".8"/>`;
   if (c.hat)
     s += `<path d="M9.4 8.6Q15.6 3.4 22.4 7.4L23 10.8 9.2 11.2Z" fill="#8e7d59" stroke="#514b3c" stroke-width=".7"/><path d="M5.6 11.4Q15.6 9.6 27.6 10.6L26.4 12.2 7 12.6Z" fill="#a29469"/>` +
       `<path d="M9.6 9.6Q15.8 8.2 22.8 9" fill="none" stroke="#6e6146" stroke-width=".9"/>`;
   if (c.scarf) s += `<path d="M13.4 22.4Q17 24.2 20 22.6L20.4 25.2Q16.6 26.6 13 25Z" fill="${c.scarf}"/>`;
-  if (c.flush) s += `<ellipse cx="20.4" cy="18.8" rx="1.4" ry=".7" fill="${c.flush}" opacity=".35"/>`;
   if (c.hood) s += `<path d="M9 13.4Q9.6 4 17.2 4.6Q23.6 5.4 24.2 12L21.6 10.6Q16 9.4 11.6 12.8L10.4 16.4Z" fill="${c.hood}" stroke="${c.hoodLine}" stroke-width=".7"/>`;
   return s;
 };
