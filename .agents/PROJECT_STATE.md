@@ -196,6 +196,11 @@ swing reach is now 1.5 tiles (`AtkReach`), down from the legacy 2.4.
 Weather: a sandstorm sends the whole Dunes village in, a snowstorm the Spire, rain only the Woods /
 Marsh children (`shelter` then `hide`; `folk_weather.go`, docs/10 §13.5).
 
+### Movement: ledges and the mine exit
+Fall damage is per ledge crossed (`fallDrop`), and the client draws a gold lip on every 2+ drop edge.
+Surfacing from a mine lands on open ground by the shaft (`surfaceExit`), and a step within your
+own tile is never blocked (client + server), so nobody can be walled into a blocked tile. docs/10 §5.
+
 ### Dev tooling
 F9 kit and F10 panel, gated on the ticket's `dev` claim. `HEARTH_DEV_ALL=1` (set by
 `npm run start:dev`) grants it to **loopback requests only** — checked per-request, not on the

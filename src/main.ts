@@ -421,6 +421,7 @@ class Hearth extends Phaser.Scene {
     this.quitting = false;
     this.makeWeatherFx();
     this.makeGlowTextures();
+    this.makeLipTextures();
     this.registerBirdAnims();
     this.registerPopAnims();
     this.dev = new DevOverlay(this);
@@ -716,6 +717,40 @@ class Hearth extends Phaser.Scene {
   nextActSeq() {
     this.pendingActSeq = ++this.actionSeq;
     return this.pendingActSeq;
+  }
+
+  /**
+   * Ledge lips: one small texture per edge of a tile's top diamond, drawn where the
+   * ground beyond that edge is dry land 2+ levels lower — exactly where the server's
+   * fall damage applies (handlePos / fallDrop). The iso view only shows cliff faces
+   * that point at the camera, so a drop off the back of a tile looked like flat ground.
+   * Same 64x40 canvas as the tile art; the diamond is its top 32px.
+   */
+  makeLipTextures() {
+    const V = { n: [32, 0], e: [64, 16], s: [32, 32], w: [0, 16] } as const;
+    for (const [key, a, b] of [["ne", V.n, V.e], ["es", V.e, V.s], ["sw", V.s, V.w], ["wn", V.w, V.n]] as const) {
+      if (this.textures.exists(`lip-${key}`)) continue;
+      // pull the edge 1.5px in toward the centre so it sits on the top face, not the skirt
+      const ix = (p: readonly number[]) => p[0] + (32 - p[0]) * 0.06, iy = (p: readonly number[]) => p[1] + (16 - p[1]) * 0.1;
+      const g = this.make.graphics({}, false);
+      g.lineStyle(5, 0x2a1608, 0.6).lineBetween(ix(a), iy(a), ix(b), iy(b));
+      g.lineStyle(2.4, 0xffc95e, 1).lineBetween(ix(a), iy(a), ix(b), iy(b));
+      g.generateTexture(`lip-${key}`, 64, 40);
+      g.destroy();
+    }
+  }
+
+  /** The lip textures tile i needs: one per edge whose neighbour is dry land 2+ levels below. */
+  private lipsAt(x: number, y: number): string[] {
+    const e = this.world.elev[y * SIZE + x], out: string[] = [];
+    for (const [dx, dy, key] of [[0, -1, "lip-ne"], [1, 0, "lip-es"], [0, 1, "lip-sw"], [-1, 0, "lip-wn"]] as const) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE) continue;
+      const t = this.world.tiles[ny * SIZE + nx];
+      if (t === UNLOADED || t === T.WATER) continue; // unknown, or a splash (no damage)
+      if (e - this.world.elev[ny * SIZE + nx] >= 2) out.push(key);
+    }
+    return out;
   }
 
   makeGlowTextures() {
@@ -1125,6 +1160,9 @@ class Hearth extends Phaser.Scene {
         const e = Math.max(1, this.world.elev[i]);
         for (let l = 0; l < e; l++)
           rt.batchDraw(key, p.x - TW / 2 - rx, p.y - l * 10 - ry); // stacked skirts form cliffs
+        // ledge lips on the top face, in draw order so tiles in front still cover them
+        if (key !== "water" && !key.startsWith("water_"))
+          for (const lip of this.lipsAt(x, y)) rt.batchDraw(lip, p.x - TW / 2 - rx, p.y - (e - 1) * 10 - ry);
       }
     rt.endDraw();
     return rt;
@@ -1173,6 +1211,8 @@ class Hearth extends Phaser.Scene {
         const e = Math.max(1, this.world.elev[ii]);
         if (p.y - (e - 1) * 10 >= by + bh || p.y + TILE_H <= by) continue;
         for (let l = 0; l < e; l++) scratch.batchDraw(kk, left - bx, p.y - l * 10 - by);
+        if (kk !== "water" && !kk.startsWith("water_"))
+          for (const lip of this.lipsAt(tx, ty)) scratch.batchDraw(lip, left - bx, p.y - (e - 1) * 10 - by);
       }
     scratch.endDraw();
     for (const [k, rt] of this.chunks) {
@@ -2677,9 +2717,9 @@ class Hearth extends Phaser.Scene {
     if (this.mud.has(i)) return T.MUD;
     return this.world.tiles[i];
   }
-  blockedAt(x: number, y: number) {
+  blockedAt(x: number, y: number, z = this.z, fromX = this.px, fromY = this.py) {
     if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) return true;
-    if (this.z === 1) return !this.digs.has((y | 0) * SIZE + (x | 0)); // underground: only carved tunnels
+    if (z === 1) return !this.digs.has((y | 0) * SIZE + (x | 0)); // underground: only carved tunnels
     // Terrain that has not streamed in is impassable — the player must never walk off the
     // edge of the loaded world into a hole (§4, unloaded state).
     if (!this.world.loadedAt(x, y)) return true;
@@ -2687,7 +2727,7 @@ class Hearth extends Phaser.Scene {
     if (this.tileAt(x, y) === T.WATER) return false;
     const climb = this.jumpT >= 0 ? 2 : 1; // jumping clears higher ledges
     // you can always drop DOWN a cliff (fall damage applies) — only climbing is limited
-    if (this.elevAt(x, y) - this.elevAt(this.px, this.py) > climb) return true;
+    if (this.elevAt(x, y) - this.elevAt(fromX, fromY) > climb) return true;
     const st = this.structSpr.get((y | 0) * SIZE + (x | 0));
     // non-blocking decor and farmplots are walkable
     if (
@@ -2704,6 +2744,24 @@ class Hearth extends Phaser.Scene {
       return true;
     if (this.medicBlock.has((y | 0) * SIZE + (x | 0))) return true;
     return false;
+  }
+
+  /**
+   * Where a keeper climbing out of `shaft` stands on the surface. Underground they can be
+   * anywhere within 2 tiles of it, and the same spot up top may be the shaft's own tile, a
+   * wall or a cliff face: surfacing there walled them in. So: where they are if that is
+   * open ground up top, else the nearest open tile round the shaft (land before water).
+   * Every candidate is within the server's ZNear (3) of the shaft.
+   */
+  private surfaceExit(shaft: number): [number, number] {
+    const sx = shaft % SIZE, sy = (shaft / SIZE) | 0;
+    const cands: [number, number][] = [];
+    if (((this.py | 0) * SIZE + (this.px | 0)) !== shaft) cands.push([this.px, this.py]);
+    for (const [dx, dy] of [[0, 1], [1, 0], [-1, 0], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]])
+      cands.push([sx + dx + 0.5, sy + dy + 0.5]);
+    cands.sort((a, b) => Math.hypot(a[0] - this.px, a[1] - this.py) - Math.hypot(b[0] - this.px, b[1] - this.py));
+    const open = (c: [number, number]) => !this.blockedAt(c[0], c[1], 0, sx + 0.5, sy + 0.5);
+    return cands.find((c) => open(c) && this.tileAt(c[0], c[1]) !== T.WATER) ?? cands.find(open) ?? [this.px, this.py];
   }
 
   nearMineshaft() {
@@ -2738,6 +2796,7 @@ class Hearth extends Phaser.Scene {
       const shaft = this.nearMineshaft();
       if (shaft >= 0 && now - this.zToggleAt > 900) {
         this.zToggleAt = now;
+        [this.px, this.py] = this.surfaceExit(shaft);
         this.setZ(0);
         return;
       }
@@ -3143,9 +3202,13 @@ class Hearth extends Phaser.Scene {
       const speed = baseSpeed * (slowed ? 0.6 : 1) * dt * 0.707;
       const nx = this.px + wx * speed,
         ny = this.py + wy * speed;
-      if (!this.blockedAt(nx, this.py))
+      // a step that stays inside the tile we already stand in enters nothing new, so it
+      // is never blocked — or a keeper who ends up inside a blocked tile (surfacing on a
+      // shaft, something built underfoot) is walled in on every side (server: withinTile)
+      const inTile = (x: number, y: number) => (x | 0) === (this.px | 0) && (y | 0) === (this.py | 0);
+      if (inTile(nx, this.py) || !this.blockedAt(nx, this.py))
         this.px = Math.max(0, Math.min(SIZE - 1, nx));
-      if (!this.blockedAt(this.px, ny))
+      if (inTile(this.px, ny) || !this.blockedAt(this.px, ny))
         this.py = Math.max(0, Math.min(SIZE - 1, ny));
     }
     if (k.E.isDown) this.interact();

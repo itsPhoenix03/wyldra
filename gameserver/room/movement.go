@@ -196,8 +196,12 @@ func (r *Room) handlePos(p *Player, m map[string]any) {
 	}
 	// stepping OUT to the surface lands on a fixed door/shaft tile the player
 	// never chose; collision-checking it could strand them underground, so only
-	// check entries and normal steps
-	if !(zChange && nz == 0) && r.posBlocked(nx, ny, nz, p.X, p.Y) {
+	// check entries and normal steps. And a step that stays inside the tile the
+	// player already stands in is never blocked: it enters nothing new, and
+	// refusing it trapped a keeper who surfaced on the mineshaft's own tile —
+	// every short step out started inside that blocked tile.
+	withinTile := !zChange && ti(nx, ny) == ti(p.X, p.Y)
+	if !(zChange && nz == 0) && !withinTile && r.posBlocked(nx, ny, nz, p.X, p.Y) {
 		snapback()
 		return
 	}
@@ -208,11 +212,10 @@ func (r *Room) handlePos(p *Player, m map[string]any) {
 		p.LastZAt = now
 	}
 
-	// fall damage: dropping 2+ elevation levels in one step hurts (drop - 1 hp)
+	// fall damage: going over a ledge of 2+ elevation levels hurts (drop - 1 hp)
 	moved := math.Hypot(mx-p.X, my-p.Y)
 	if p.Z == 0 && nb == 0 && moved > 0.01 && moved < 3 {
-		drop := int(r.world.Elev[ti(p.X, p.Y)]) - int(r.world.Elev[ti(mx, my)])
-		if drop >= 2 && r.world.Tiles[ti(mx, my)] != world.TWater {
+		if drop := r.fallDrop(p.X, p.Y, mx, my); drop >= 2 {
 			p.LastDamageAt = now
 			p.HP = max(0, p.HP-(drop-1))
 			if p.HP <= 0 {
@@ -235,6 +238,56 @@ func (r *Room) handlePos(p *Player, m map[string]any) {
 	r.broadcast(map[string]any{"t": "pos", "id": p.S.ID, "x": p.X, "y": p.Y, "z": p.Z, "b": p.B})
 	r.pushChunks(p)
 	r.sailingHazards(p, nb, now)
+}
+
+// fallDrop is the ledge a step from (fx, fy) to (tx, ty) went over: the
+// biggest single tile-to-tile drop onto dry land along the way. A pos update
+// spans ~0.4 tiles, so it can cross two tile edges at once; comparing only its
+// two end tiles made a diagonal cut across the corner of a staircase (3 -> 2 -> 1,
+// every step a single level) read as a 2-level fall — fall damage on ground that
+// looks, and is, a gentle slope. The client walks axis by axis, so the route is
+// one of the two staircase orders; the keeper falls only if both go over a
+// ledge, which is exactly where the client draws a ledge lip (drawChunk).
+// Landing in water never hurts.
+func (r *Room) fallDrop(fx, fy, tx, ty float64) int {
+	return min(r.routeDrop(fx, fy, tx, ty, true), r.routeDrop(fx, fy, tx, ty, false))
+}
+
+func (r *Room) routeDrop(fx, fy, tx, ty float64, xFirst bool) int {
+	cx, cy, ex, ey := int(fx), int(fy), int(tx), int(ty)
+	worst := 0
+	step := func(nx, ny int) {
+		from, to := cy*world.SIZE+cx, ny*world.SIZE+nx
+		if r.world.Tiles[to] != world.TWater {
+			worst = max(worst, int(r.world.Elev[from])-int(r.world.Elev[to]))
+		}
+		cx, cy = nx, ny
+	}
+	alongX := func() {
+		for cx != ex {
+			step(cx+sign(ex-cx), cy)
+		}
+	}
+	alongY := func() {
+		for cy != ey {
+			step(cx, cy+sign(ey-cy))
+		}
+	}
+	if xFirst {
+		alongX()
+		alongY()
+	} else {
+		alongY()
+		alongX()
+	}
+	return worst
+}
+
+func sign(v int) int {
+	if v < 0 {
+		return -1
+	}
+	return 1
 }
 
 // sailingHazards is the legacy tail of the pos handler: icebergs and scalding

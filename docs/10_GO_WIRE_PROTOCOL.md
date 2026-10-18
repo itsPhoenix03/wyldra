@@ -210,6 +210,17 @@ server-authoritative movement work:
   endpoints — plus a 500 ms cooldown
 - rejection → `{ t:'fix', x, y, z, b }`, throttled to one per 250 ms per player
 - every server-side reposition opens a 1 s grace window suppressing the distance check
+- a step that stays inside the tile the player already stands in is never collision-blocked
+  (`withinTile`): it enters nothing, and refusing it walled in a keeper who surfaced on the
+  mineshaft's own tile. The client also never surfaces there now (`surfaceExit`: the open tile
+  nearest the shaft).
+- **fall damage**: going over a **ledge** of 2+ elevation levels costs `drop − 1` hp. The drop is
+  measured tile edge by tile edge along the step (`fallDrop`), taking the gentler of the two
+  axis-by-axis routes, not between the step's two end tiles: a ~0.4-tile update can cross two
+  edges at once, and a diagonal down a 1-level staircase (3 → 2 → 1) used to read as a fall.
+  Landing in water never hurts. The client draws a gold **ledge lip** on every tile edge that is
+  such a drop (`makeLipTextures` / `lipsAt`) — including the back edges the iso view has no
+  cliff face for.
 
 Porting this faithfully is mandatory; it is the security boundary for all other handlers,
 since every range check anchors on `p.x/p.y`.
