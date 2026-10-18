@@ -186,20 +186,30 @@ func (r *Room) survivalTick() {
 			q.ThermN = 0
 		}
 
+		// Taking the shelter a storm message tells you to take must actually
+		// protect you: the cases below are first-match, so a sheltered keeper used
+		// to fall through the storm case into plain heat / cold and take the same
+		// damage as an exposed one. Shelter from a storm covers its biome's
+		// exposure too (shade from the sun beside a wall, the fire's warmth).
+		sandStorm := r.weather.kind == "sandstorm" && tile == world.TSand
+		snowStorm := r.weather.kind == "snowstorm" && tile == world.TSnow
+		sandCover := sandStorm && r.sheltered(q, 2)
+		snowCover := snowStorm && r.nearStruct(q, "campfire", 6)
+
 		delta := 0
 		var msg string
 		switch {
 		case q.Z != 0:
 			// underground or indoors: sheltered from the weather
-		case r.weather.kind == "sandstorm" && tile == world.TSand && !r.nearAnyStruct(q, 2):
-			// any structure within 2 tiles counts as shelter from the sand
-			delta, msg = -1, "The sandstorm flays you — shelter beside a structure!"
-		case r.weather.kind == "snowstorm" && tile == world.TSnow && !r.nearStruct(q, "campfire", 6):
+		case sandStorm && !sandCover:
+			// a wall, a building, a hut within 2 tiles breaks the sand (sheltered)
+			delta, msg = -1, "The sandstorm flays you — shelter beside a wall or a hut!"
+		case snowStorm && !snowCover:
 			// only a campfire keeps the blizzard off, and it reaches 6 tiles
 			delta, msg = -1, "The blizzard freezes you — get to a campfire!"
-		case tile == world.TSand && !r.isNight() && q.Worn != "heatcloak":
+		case tile == world.TSand && !r.isNight() && q.Worn != "heatcloak" && !sandCover:
 			delta, msg = -1, "The desert heat sears you! Craft a Heat Cloak."
-		case tile == world.TSnow && q.Worn != "furcloak":
+		case tile == world.TSnow && q.Worn != "furcloak" && !snowCover:
 			delta, msg = -1, "The glacial cold bites! Craft a Fur Cloak."
 		case q.Hunger <= 0 || q.Thirst <= 0:
 			delta = -1

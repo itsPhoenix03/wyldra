@@ -407,9 +407,18 @@ Weather is a single global state, not per-region. A front starts with probabilit
 biome is who it hurts:
 
 - `rain` (Woods / Marsh) — cosmetic on the server; the client draws it.
-- `sandstorm` (Dunes) — 1 hp per 5 s on `SAND` unless *any* structure is within 2 tiles.
+- `sandstorm` (Dunes) — 1 hp per 5 s on `SAND` unless **shelter** is within 2 tiles
+  (`Room.sheltered`): a blocking structure, a modular `wall` or `fixture` (pillar, door), a
+  village hut or a medic's hut. Open decor (`DECOR_NONBLOCKING`: rugs, lanterns, banners…),
+  farmplots and modular floors are not shelter.
 - `snowstorm` (Spire) — 1 hp per 5 s on `SNOW` unless a **campfire** is within 6 tiles. A fur
   cloak does not help; that is what separates a blizzard from ordinary cold.
+
+**Shelter covers the biome's exposure too.** While a storm blows, a keeper sheltered from it
+takes no desert heat (shade beside the wall) or glacial cold (the fire's warmth) either. The
+survival cases are first-match, and a sheltered keeper used to fall through the storm case into
+plain heat / cold — losing the same 1 hp per 5 s as one standing in the open. With no storm,
+heat and cold are back to needing the cloaks.
 
 Being underground (`z != 0`) shelters from all of it. "Blizzard" is the client's
 name for `snowstorm`, and ambient snowfall is a permanent client-side particle layer in the
@@ -981,8 +990,8 @@ Each camp has a fixed roster (Woods: `villager`, `villager2`, `woods_child`;
 Dunes: `ashmark_hunter`, `villager2`; Marsh: `elder_yvenne`, `villager`). Folk are
 server-simulated, cannot be attacked, and ride every `cre` frame as
 `f: [id, x, y, kind, act]` (positions are tile-centre floats, 2 dp). `act` is one
-of `idle`, `walk`, `run`, `shun`, `talk`, `scold`, `sit`, `collect`, `build`, `craft`, `hide`
-(and the routine acts of §13.3; `shun` and `scold` are §13.4):
+of `idle`, `walk`, `run`, `shun`, `shelter`, `talk`, `scold`, `sit`, `collect`, `build`, `craft`, `hide`
+(and the routine acts of §13.3; `shun` and `scold` are §13.4, `shelter` §13.5):
 
 - By day they wander the yard, work, sit at the fire, and stop and `talk` to a
   surface player within 2.4 tiles. What they say is client-side flavour.
@@ -1046,3 +1055,13 @@ It is capped at 30, forgiven at 1 per 20 s, and not saved.
 Folk who see the harm done (within 12 tiles) `scold` that keeper for 12 ticks
 whatever the tally. A change of standing reaches the keeper as a `msg`. Lines are
 client-side flavour (`src/folk.ts` `SCOLDS`, `SHUN_SHOUTS`).
+
+### 13.5 Folk and the weather
+
+`gameserver/room/folk_weather.go`. The folk of the island the weather bites react the moment it
+starts: a `sandstorm` sends the whole Dunes village in and a `snowstorm` the whole Spire, watchers
+included; `rain` calls the Woods and Marsh children in while the adults carry on. While heading
+in they are `shelter` (the same run as `run`; the client shouts about the storm rather than the
+blight), then `hide` until it passes — then out again after the usual all-clear. Folk on other
+islands carry on. On every `wx`, up to two folk in earshot remark on it client-side
+(`src/folk.ts` `onWeather`).

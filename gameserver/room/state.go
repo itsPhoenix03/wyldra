@@ -127,10 +127,34 @@ func (r *Room) blockedTile(x, y float64) bool {
 	return true
 }
 
-// nearAnyStruct reports whether any structure sits within r tiles of the player.
-func (rm *Room) nearAnyStruct(p *Player, radius float64) bool {
-	for i := range rm.structures {
-		if math.Hypot(float64(i%world.SIZE)-p.X, float64(i/world.SIZE)-p.Y) <= radius {
+// sheltered reports whether something solid enough to break a storm stands
+// within radius of the player: a blocking structure (not decor that lies flat or
+// stands open, not a farmplot), a modular wall or fixture (pillar, door — not a
+// floor or a banner), a village hut, or a medic's hut. nearAnyStruct counted
+// any structure at all, rugs and torches included, and no modular building or
+// hut — so a keeper inside their own stone house was flayed by the sandstorm.
+// (That was the legacy nearAnyStruct, which this replaces.)
+func (rm *Room) sheltered(p *Player, radius float64) bool {
+	near := func(i int) bool {
+		return math.Hypot(float64(i%world.SIZE)-p.X, float64(i/world.SIZE)-p.Y) <= radius
+	}
+	for i, s := range rm.structures {
+		if !rm.defs.DecorNonBlk[s.Kind] && s.Kind != "farmplot" && near(i) {
+			return true
+		}
+	}
+	for _, k := range rm.modOrder {
+		if m := rm.modules[k]; (m.Slot == "wall" || m.Slot == "fixture") && near(m.I) {
+			return true
+		}
+	}
+	for _, c := range rm.camps {
+		if near(c.HutY*world.SIZE + c.HutX) {
+			return true
+		}
+	}
+	for _, m := range rm.medics {
+		if near(m.HutY*world.SIZE + m.HutX) {
 			return true
 		}
 	}

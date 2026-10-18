@@ -1771,10 +1771,11 @@ class Hearth extends Phaser.Scene {
       this.weather = m.kind;
       if (m.kind === "rain") showMsg("🌧 Rain sweeps across the lowlands.");
       else if (m.kind === "sandstorm")
-        showMsg("🌪 A SANDSTORM scours the Dunes — shelter beside structures!");
+        showMsg("🌪 A SANDSTORM scours the Dunes — shelter beside a wall or a hut!");
       else if (m.kind === "snowstorm")
         showMsg("❄ A BLIZZARD engulfs the Spire — reach a campfire!");
       else showMsg("The skies clear.");
+      this.folk.onWeather(m.kind ?? null, zonesNear(this.px, this.py)[0] ?? null);
     } else if (m.t === "build") {
       this.audio.build();
       this.addStruct(m.i, m.kind, m.hp, m.dir, m.lvl);

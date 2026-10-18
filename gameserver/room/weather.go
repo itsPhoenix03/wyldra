@@ -11,7 +11,7 @@ import (
 // hurts, which is why the survival tick, not this file, owns the damage rules:
 //
 //	rain       (Woods / Marsh)  cosmetic on the server; the client draws it
-//	sandstorm  (Dunes)          1 hp per 5s on SAND with no structure within 2
+//	sandstorm  (Dunes)          1 hp per 5s on SAND with no shelter within 2 (Room.sheltered)
 //	snowstorm  (Spire)          1 hp per 5s on SNOW with no campfire within 6
 //
 // "blizzard" is the client's name for snowstorm and "ambient snowfall" is the

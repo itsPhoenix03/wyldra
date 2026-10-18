@@ -313,7 +313,7 @@ func (r *Room) folkTick() {
 		}
 
 		if f.state == fsHidden {
-			if r.folkThreatened(f, folkClearR) || r.villageAlarmed(f, folkAlarmClearR) || r.shunning(f, folkScoldR+3) {
+			if r.folkThreatened(f, folkClearR) || r.villageAlarmed(f, folkAlarmClearR) || r.shunning(f, folkScoldR+3) || r.stormDrivesIn(f) {
 				f.calm = 0
 				continue
 			}
@@ -329,10 +329,12 @@ func (r *Room) folkTick() {
 
 		// danger first: run for the hut and duck inside — a creature near them or
 		// near the village fire, or a keeper the village has turned against
-		// ("shun" is the same run, so the client can tell what they are running from)
+		// — or the storm blowing on their island (folk_weather.go). "shun" and
+		// "shelter" are the same run, so the client can tell what they run from.
 		creDanger := r.folkThreatened(f, folkThreatR) || r.villageAlarmed(f, folkAlarmR)
 		shun := !creDanger && r.shunning(f, folkScoldR)
-		danger := creDanger || shun
+		storm := !creDanger && !shun && r.stormDrivesIn(f)
+		danger := creDanger || shun || storm
 		if danger || f.state == fsFlee {
 			if f.state != fsFlee && !danger {
 				f.state = fsTask
@@ -342,11 +344,15 @@ func (r *Room) folkTick() {
 					f.dropPlans()
 				}
 				run := f.Act // still on the way in: keep running from what sent them
-				if creDanger || run != "shun" {
+				switch {
+				case creDanger:
 					run = "run"
-				}
-				if shun {
+				case shun:
 					run = "shun"
+				case storm:
+					run = "shelter"
+				case run != "shun" && run != "shelter":
+					run = "run"
 				}
 				f.state, f.Act, f.Face = fsFlee, run, math.NaN()
 				f.going++

@@ -214,7 +214,7 @@ worldgen, bump the default seed or tell the user to delete the save.</div>
 at infected tiles, or near players at night) → monster AI (wisp drifts+infects; brute prefers structures,
 3 dmg; others chase nearest surface player — scent radius 40 if carrying essence/meat, else 26; structures
 in the path get attacked; contact damage) → wildlife spawn (player-biased, per-island species) + wander/flee
-→ every 5s: hunger/thirst drain (~10/7min), env damage (sandstorm→shelter by structure; snowstorm→campfire;
+→ every 5s: hunger/thirst drain (~10/7min), env damage (sandstorm→shelter within 2: blocking structure, modular wall/fixture or hut, which also shades from the heat; snowstorm→campfire, which also warms;
 desert day heat→Heat Cloak; Spire cold→Fur Cloak; skipped underground), campfire regen → every 10s at night:
 Blight Storm erosion of WOODEN structures not near a campfire → wave timer → broadcast <code>cre</code>.</p>
 <p><b>Persistence:</b> <code>loadSave()/saveGame()</code> ↔ <code>server/save.json</code>, every 30s + SIGINT.

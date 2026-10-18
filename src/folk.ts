@@ -42,6 +42,8 @@ export interface FolkHost extends Phaser.Scene {
   z: number;
   /** A folk member of this kind is in view: stream its clips in if they are not yet (src/atlas.ts). */
   needHuman(kind: string): void;
+  /** The weather now blowing (server `wx`): null when the sky is clear. */
+  weather: string | null;
 }
 
 const NAMES: Record<string, string> = {
@@ -128,6 +130,22 @@ const LINES: Record<string, string[]> = {
 const SHOUTS = ["Blight! Inside, quick!", "They're coming — get in!", "Run!", "To the hut!"];
 
 // The folk turn on a keeper who harms their island (server: gameserver/room/folk_regard.go).
+/** `shelter`: heading in from the storm on their island (server: folk_weather.go). */
+const STORM_SHOUTS: Record<string, string[]> = {
+  sandstorm: ["Sand's rising — get inside!", "Cover your eyes, in you go!", "Storm off the dunes!"],
+  snowstorm: ["White-out — to the stove!", "Blizzard! Everyone in!", "Bar the door against it!"],
+  rain: ["It's pouring, Mum!", "Race you inside!", "I'm soaked!"],
+};
+/** Folk in earshot remark when the weather turns. Keyed by kind, then by whether it is their island's. */
+const WEATHER_TALK: Record<string, { here: string[]; there: string[] }> = {
+  sandstorm: { here: ["Here it comes. Inside, all of you.", "The dunes are walking again."], there: ["Someone's eating sand on the Dunes today."] },
+  snowstorm: { here: ["Feel that wind? Blizzard's coming.", "Stoke the stove. Now."], there: ["The Spire's catching it today."] },
+  rain: { here: ["Here comes the rain.", "Good for the crops, at least.", "Little ones — inside!"], there: ["Smells like rain over the lowlands."] },
+  clear: { here: ["It's passing.", "Sky's clearing.", "Out you come, it's done."], there: [] },
+};
+/** Which weather bites which island (server weather.go). */
+const WEATHER_ISLES: Record<string, string[]> = { sandstorm: ["dunes"], snowstorm: ["spire"], rain: ["woods", "marsh"] };
+
 /** `shun`: running from a keeper the village has turned against. */
 const SHUN_SHOUTS = ["It's the tree-cutter — inside!", "Don't let them near the little ones!", "Get in, they're back!", "Bar the door!"];
 /** `scold`: standing to tell a keeper off — for harm they just saw, or harm they remember. */
@@ -166,7 +184,7 @@ const SPEECH: Record<string, string[]> = {
 };
 
 /** Moving: the walk loop (play and run are the walk sped up). */
-const MOVE_ACTS = new Set(["walk", "run", "shun", "play"]);
+const MOVE_ACTS = new Set(["walk", "run", "shun", "shelter", "play"]);
 /** Work: a one-shot clip looped with a breather, facing the work. */
 const WORK_ACTS = new Set(["collect", "build", "craft"]);
 /** Holding still: drawn facing the way the server says (`face`), not turned by drift. */
@@ -270,6 +288,32 @@ export class FolkView {
   }
 
   /**
+   * The weather turned (`kind` null: it cleared). Up to two folk in earshot remark
+   * on it — urgently if it is their island's weather, idly if it is somewhere else.
+   * `isle` is the island the keeper is on (src/zones.ts), which is theirs.
+   */
+  onWeather(kind: string | null, isle: string | null) {
+    const talk = WEATHER_TALK[kind ?? "clear"];
+    const was = this.lastWeather;
+    this.lastWeather = kind;
+    if (!talk || !isle) return;
+    // a clear sky only matters where the weather was biting
+    const here = (WEATHER_ISLES[kind ?? was ?? ""] ?? []).includes(isle);
+    const lines = here ? talk.here : talk.there;
+    if (!lines.length) return;
+    let n = 0;
+    for (const [id, sp] of this.spr) {
+      if (n >= 2) break;
+      if (!sp.visible || sp.getData("act") === "hide" || !this.near(sp, 10)) continue;
+      n++;
+      this.s.time.delayedCall(200 + n * 900 + Math.random() * 500, () => {
+        if (sp.active && sp.visible) this.say(id, lines[(Math.random() * lines.length) | 0], 2800);
+      });
+    }
+  }
+  private lastWeather: string | null = null;
+
+  /**
    * The clips of `kind` just streamed in: restart whatever each of them is doing,
    * so one who has been standing in for a missing clip picks it up.
    */
@@ -314,9 +358,9 @@ export class FolkView {
     if (STILL_ACTS.has(act)) this.orient(sp);
     if (MOVE_ACTS.has(act)) {
       this.look(sp);
-      if ((act === "run" || act === "shun") && this.clock - sp.getData("shoutAt") > 6) {
+      if ((act === "run" || act === "shun" || act === "shelter") && this.clock - sp.getData("shoutAt") > 6) {
         sp.setData("shoutAt", this.clock);
-        const lines = act === "shun" ? SHUN_SHOUTS : SHOUTS;
+        const lines = act === "shun" ? SHUN_SHOUTS : act === "shelter" ? STORM_SHOUTS[this.s.weather ?? ""] ?? SHOUTS : SHOUTS;
         this.say(id, lines[(Math.random() * lines.length) | 0], 1800);
       }
     } else if (act === "sit") {
@@ -364,7 +408,7 @@ export class FolkView {
       if (this.s.anims.exists(k)) {
         const at = sp.anims.isPlaying ? sp.anims.currentFrame?.index ?? 1 : 1;
         sp.play({ key: k, startFrame: at - 1 });
-        sp.anims.timeScale = act === "run" || act === "shun" ? 1.7 : act === "play" ? 1.5 : 1;
+        sp.anims.timeScale = act === "run" || act === "shun" || act === "shelter" ? 1.7 : act === "play" ? 1.5 : 1;
         sp.setData("clip", k);
         return;
       }
@@ -499,7 +543,7 @@ export class FolkView {
         }
       }
       // procedural motion where there is no drawn clip, and small life on top of standing
-      const ph = sp.getData("phase") + dt * (act === "run" || act === "shun" ? 16 : act === "play" ? 13 : 9);
+      const ph = sp.getData("phase") + dt * (act === "run" || act === "shun" || act === "shelter" ? 16 : act === "play" ? 13 : 9);
       sp.setData("phase", ph);
       let lift = 0, rot = 0, sy = 1;
       const drawn = !!sp.getData("clip");
