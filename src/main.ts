@@ -1906,7 +1906,12 @@ class Hearth extends Phaser.Scene {
           this.slowUntil = (this.slowUntil || 0) + m.slow;
         }
       }
-      if (m.hp === 10 && this.hp <= 1) {
+      // A respawn is full hp WITH the respawn point. A heal is not: the medic heals to full
+      // in one go and its frame (`healed`, `source`) has no position — taking it for a
+      // respawn from 1 hp set px/py to undefined, the camera to NaN, and the world to black.
+      const respawned =
+        m.hp === 10 && this.hp <= 1 && m.healed === undefined && Number.isFinite(m.x) && Number.isFinite(m.y);
+      if (respawned) {
         this.px = m.x;
         this.py = m.y;
         if (this.z === 1) this.setZ(0);
