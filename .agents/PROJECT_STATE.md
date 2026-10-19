@@ -204,6 +204,24 @@ turns with them (one villager greets at a time).
 Surfacing from a mine lands on open ground by the shaft (`surfaceExit`), and a step within your
 own tile is never blocked (client + server), so nobody can be walled into a blocked tile. docs/10 §5.
 
+### Enemy AI: levels and the combat brain
+Every creature has a level 1–5 (5th element of its `cre` row; rolled from type tier, lit
+monoliths, a veteran roll and the final assault; ≤ 2 alphas alive). Three layers on top of
+the legacy port, each in its own file and struct embedded in `Creature`:
+`creature_base.go` (every enemy — sight lines, hearing, working scent radius, grudge and
+sticky targeting, 3 attack slots per keeper with the rest circling a ring, momentum, stuck
+recovery), `creature_attack.go` (every enemy — every melee blow and ranged shot is
+telegraphed (`catk` / `ctel` / `caim`) and lands where it was committed, so keepers can step
+out of it), and `creature_elite.go` (by level and type kit, `creature_levels.go creKit` —
+flank, pack call, dodge (`cdodge`), hit and run, charge (`ccharge`), lead shot, alpha with
+focus fire / `crally` / `cpanic` on death). `stepCreature` in creatures.go owns the call
+order. Client renders level pips / alpha crown and every telegraph (`src/main.ts`
+`cue*`, sounds in `src/audio.ts`); dev panel spawns take a level, and its "Enemy AI test"
+button (`devcmd aitest`: swarm / pack / duel / siege / warlord) clears the monsters and drops
+a scripted squad; "↺ Reset" (`devcmd monoreset`) puts every monolith back to dormant. Wire spec and tuning:
+docs/10 §13.6. Balance note: a crawler deals ~0.83 hp/s to a keeper who stands still
+(was 1.0); a hugged brute slams every ~2 s for 2 to everyone within 1.4 (was 2 per second).
+
 ### Dev tooling
 F9 kit and F10 panel, gated on the ticket's `dev` claim. `HEARTH_DEV_ALL=1` (set by
 `npm run start:dev`) grants it to **loopback requests only** — checked per-request, not on the
@@ -291,6 +309,7 @@ player's and enemy's attack radius and heading (`src/devOverlay.ts`; radii mirro
 | **Go game server** (authoritative) | `gameserver/` |
 | — worldgen, bit-exact port | `gameserver/world/` **(verified — do not edit without re-running parity)** |
 | — room loop, handlers, AI, medic, dev | `gameserver/room/` |
+| — enemy levels / base brain / attacks / abilities | `gameserver/room/creature_{levels,base,attack,elite}.go` |
 | — multi-world routing | `gameserver/hosting/` |
 | — ticket verification | `gameserver/auth/` |
 | — chunk RLE codec | `gameserver/proto/` |

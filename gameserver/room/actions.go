@@ -864,15 +864,29 @@ func (r *Room) handleAtk(p *Player, m map[string]any) {
 			bd, bestC, bestA, bid = d, nil, a, a.ID
 		}
 	}
+	if dx, dy := clampDir(m, "dx"), clampDir(m, "dy"); dx != 0 || dy != 0 {
+		h := math.Hypot(dx, dy)
+		p.FaceX, p.FaceY = dx/h, dy/h // a swing faces the keeper where it struck
+	}
+	// a nimble creature may sidestep the swing (creature_elite.go): a miss
+	dodgeAng, dodged := 0.0, false
+	if bestC != nil {
+		dodgeAng, dodged = r.tryDodge(p, bestC)
+	}
 	// targetI carries the struck creature/animal id, or null on a miss.
 	var targetI any
-	if bid != "" {
+	if bid != "" && !dodged {
 		targetI = bid
 	}
 	r.broadcast(map[string]any{
 		"t": "act", "id": p.S.ID, "seq": seq, "a": atkClip, "tool": nullable(p.Equip),
 		"dx": clampDir(m, "dx"), "dy": clampDir(m, "dy"), "targetI": targetI,
 	})
+	if dodged {
+		// the swing whiffed: nothing else is struck, not even a structure
+		r.broadcast(map[string]any{"t": "cdodge", "id": bestC.ID, "ang": dodgeAng, "by": p.S.ID, "seq": seq})
+		return
+	}
 
 	if bestA != nil {
 		r.hitAnimal(p, bestA, dmg, seq)

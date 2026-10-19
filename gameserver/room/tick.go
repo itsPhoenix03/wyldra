@@ -119,7 +119,7 @@ func (r *Room) broadcastCre() {
 		if typ == "" {
 			typ = "crawler"
 		}
-		cre = append(cre, row{cr.X, cr.Y, []any{cr.ID, toFixed(cr.X, 2), toFixed(cr.Y, 2), typ}})
+		cre = append(cre, row{cr.X, cr.Y, []any{cr.ID, toFixed(cr.X, 2), toFixed(cr.Y, 2), typ, max(1, cr.Level)}})
 	}
 	ani := make([]row, 0, len(r.aniOrder))
 	for _, an := range r.aniOrder {

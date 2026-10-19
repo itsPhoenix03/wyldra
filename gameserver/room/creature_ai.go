@@ -62,6 +62,9 @@ func (r *Room) sampleVelocities() {
 		if math.Hypot(vx, vy) > 2.5 {
 			vx, vy = 0, 0
 		}
+		if h := math.Hypot(vx, vy); h > 0.05 {
+			q.FaceX, q.FaceY = vx/h, vy/h // a moving keeper faces where it walks
+		}
 		q.VX, q.VY = q.VX*0.5+vx*0.5, q.VY*0.5+vy*0.5
 		q.PrevX, q.PrevY = q.X, q.Y
 	}
@@ -74,6 +77,7 @@ func (r *Room) creatureSawPrey(c *Creature, q *Player) {
 	if !c.Hunting {
 		c.Hunting = true
 		r.broadcast(map[string]any{"t": "calert", "id": c.ID})
+		r.packCall(c, q)
 	}
 }
 
@@ -538,16 +542,6 @@ func (r *Room) separate(c *Creature, nx, ny float64) (float64, float64) {
 		py += dy / d * push
 	}
 	return nx + px, ny + py
-}
-
-// struckRetreat: the skirmishers fall back after landing a blow.
-func struckRetreat(c *Creature, typ string) {
-	switch typ {
-	case "stalker":
-		c.Retreat = 7
-	case "husk_wolf", "drowned":
-		c.Retreat = 4
-	}
 }
 
 func abs(n int) int {
