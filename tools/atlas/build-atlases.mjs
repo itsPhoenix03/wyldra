@@ -4,11 +4,13 @@
 //   node tools/atlas/build-atlases.mjs          build if any input changed (fast no-op otherwise)
 //   node tools/atlas/build-atlases.mjs --force  rebuild everything
 //
-// Inputs:  src/assets.ts (ASSET_MANIFEST + PACK_OF), the SVGs it names, and
-//          src/keeperSkinArt.ts for the keeper gear variants.
+// Inputs:  src/assets.ts (ASSET_MANIFEST + PACK_OF), the SVGs it names,
+//          src/keeperSkinArt.ts for the keeper gear variants, and src/menuArt.ts
+//          (BACKDROPS[BACKDROP]) for the title screen's backdrop.
 // Outputs: assets/atlas/<pack>.<hash>.png          one atlas per pack (served from /atlas/)
 //          assets/atlas/keeper~<gear>.<hash>.png   the keeper frame set wearing each gear variant
 //          assets/atlas/keeper-mask~<gear>.<hash>.png  shirt coverage for recolouring (R body, G highlight)
+//          assets/atlas/menu-<biome>.<hash>.png    the title screen's backdrop: an island of one biome's tiles
 //          src/generated/atlas.json                frame rects + file names, bundled into the client
 // Both output locations are gitignored: this script is the source of truth, and
 // `npm start` / `npm run build` / `npm run dev` run it first.
@@ -39,6 +41,7 @@ async function loadModule(entry) {
 }
 const { ASSET_MANIFEST, PACK_OF, KEEPER_PACK } = await loadModule('src/assets.ts');
 const skin = await loadModule('src/keeperSkinArt.ts');
+const menuArt = await loadModule('src/menuArt.ts');
 
 // ── skip when nothing changed ────────────────────────────────────────────────────
 const svgCache = new Map();
@@ -54,12 +57,16 @@ const inputHash = (() => {
   h.update(JSON.stringify(ASSET_MANIFEST));
   h.update(JSON.stringify([...PACK_OF]));
   for (const [, url] of ASSET_MANIFEST) h.update(url).update(svgOf(url));
+  const bd = menuArt.BACKDROPS[menuArt.BACKDROP];
+  h.update(menuArt.BACKDROP).update(JSON.stringify(bd.cells()));
+  for (const t of bd.tiles) h.update(svgOf(`/tiles/${t}.svg`));
   return h.digest('hex').slice(0, 16);
 })();
 if (!FORCE && existsSync(INDEX)) {
   try {
     const prev = JSON.parse(readFileSync(INDEX, 'utf8'));
-    const files = [...Object.values(prev.packs).map((p) => p.file), ...Object.values(prev.keeperSkins.variants), ...Object.values(prev.keeperSkins.masks)];
+    const files = [...Object.values(prev.packs).map((p) => p.file), ...Object.values(prev.keeperSkins.variants), ...Object.values(prev.keeperSkins.masks),
+      ...(prev.menuBackdrop ? [prev.menuBackdrop.file] : [])];
     if (prev.inputs === inputHash && files.every((f) => existsSync(join(ROOT, 'assets', f)))) {
       console.log(`[atlas] up to date (${Object.keys(prev.packs).length} packs)`);
       process.exit(0);
@@ -224,6 +231,75 @@ for (const [name, items] of [...byPack].sort(([a], [b]) => (a < b ? -1 : 1))) {
     index.keeperSkins.masks[v] = writeAtlas(`keeper-mask~${v || 'plain'}`, bytes);
     console.log(`[atlas] keeper skin ${v || 'plain'}: atlas${v ? '' : ' (= keeper pack)'} + mask`);
   }
+}
+
+// ── the title screen's backdrop: one picture made only of one biome's tiles (and, for
+// the Woods, its trees and plants), from src/menuArt.ts. Each SVG becomes a symbol (its
+// ids namespaced so they cannot collide); every cell is a column of tiles stacked one
+// tile-thickness apart with its top tile last, then the plant standing on it, back to
+// front; resvg renders the lot into a single PNG. An island is cropped to itself; land is
+// a window cut from inside the grid, so no edge of the grid shows.
+{
+  const { BACKDROP, BACKDROPS, TILE_W, TILE_H, LAYER, LAYERS_PER_LEVEL } = menuArt;
+  const bd = BACKDROPS[BACKDROP];
+  const symbol = (id, src, w, h) => {
+    const vb = (src.match(/viewBox="([^"]+)"/) || [])[1] || `0 0 ${w} ${h}`;
+    const inner = src.replace(/^[\s\S]*?<svg\b[^>]*>/, '').replace(/<\/svg>\s*$/, '')
+      .replace(/id="([^"]+)"/g, `id="${id}-$1"`).replace(/url\(#([^)]+)\)/g, `url(#${id}-$1)`);
+    return `<symbol id="${id}" viewBox="${vb}">${inner}</symbol>`;
+  };
+  const symbols = [
+    ...bd.tiles.map((t) => symbol(`t-${t}`, svgOf(`/tiles/${t}.svg`), TILE_W, TILE_H)),
+    ...Object.entries(bd.props).map(([k, [w, h]]) => symbol(`p-${k}`, svgOf(`/sprites/${k}.svg`), w, h)),
+  ];
+  const island = bd.frame.kind === 'island';
+  const win = island ? null
+    : { x0: -bd.frame.width / 2, y0: bd.frame.top, x1: bd.frame.width / 2, y1: bd.frame.top + bd.frame.height };
+  const TALL = 90; // how far a plant may stand above its tile
+  const parts = [];
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  let tiles = 0, plants = 0;
+  for (const c of bd.cells()) {
+    const cx = ((c.x - c.y) * TILE_W) / 2, cy = ((c.x + c.y) * TILE_W) / 4;
+    const layers = c.h === 0 ? 1 : c.h * LAYERS_PER_LEVEL + 1;
+    const lift = (layers - 1) * LAYER;
+    // a land window skips every column that cannot reach into it
+    if (win && (cx + TILE_W / 2 < win.x0 || cx - TILE_W / 2 > win.x1 || cy - TILE_W / 4 - lift - TALL > win.y1 || cy + TILE_H > win.y0 + (win.y1 - win.y0) + TILE_H * 4 || cy + TILE_H < win.y0)) continue;
+    for (let k = 0; k < layers; k++) {
+      const x = cx - TILE_W / 2, y = cy - TILE_W / 4 - k * LAYER;
+      const tile = k === layers - 1 ? c.top : c.side;
+      // an island's open sea is drawn see-through over a deep base, so it reads calmer than the land
+      const fade = island && c.h === 0 && tile === bd.sea ? ' opacity=".58"' : '';
+      parts.push(`<use href="#t-${tile}" x="${x}" y="${y}" width="${TILE_W}" height="${TILE_H}"${fade}/>`);
+      tiles++;
+      x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + TILE_W); y1 = Math.max(y1, y + TILE_H);
+    }
+    if (c.prop) {
+      const [k, dx, dy] = c.prop, [w, h] = bd.props[k];
+      const fx = cx + dx, fy = cy - lift + dy; // its feet on the middle of its tile
+      parts.push(`<use href="#p-${k}" x="${fx - w / 2}" y="${fy - h + 3}" width="${w}" height="${h}"/>`);
+      plants++;
+    }
+  }
+  let base = '', vx, vy, W, H, focus;
+  if (island) {
+    W = Math.ceil(x1 - x0); H = Math.ceil(y1 - y0); vx = x0; vy = y0;
+    // the deep water under the round sea (a circle on the grid is a 2:1 ellipse on screen)
+    const rx = bd.frame.r * (TILE_W / 2) * Math.SQRT2;
+    const ox = ((bd.frame.cx - bd.frame.cy) * TILE_W) / 2, oy = ((bd.frame.cx + bd.frame.cy) * TILE_W) / 4;
+    base = `<ellipse cx="${ox}" cy="${oy}" rx="${rx}" ry="${rx / 2}" fill="${bd.deep}"/>`;
+    focus = [(ox - x0) / W, (oy - y0) / H].map((v) => +v.toFixed(4)); // where the island's centre lands
+  } else {
+    W = bd.frame.width; H = bd.frame.height; vx = win.x0; vy = win.y0;
+    focus = [0.5, 0.5];
+  }
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="${vx} ${vy} ${W} ${H}">` +
+    `<defs>${symbols.join('')}</defs>${base}${parts.join('')}</svg>`;
+  const name = `menu-${BACKDROP}`;
+  const bytes = png(render(svg, W, H, name), W, H);
+  kb += bytes.length / 1024;
+  index.menuBackdrop = { biome: BACKDROP, frame: bd.frame.kind, file: writeAtlas(name, bytes), size: [W, H], focus };
+  console.log(`[atlas] ${name.padEnd(15)} ${String(tiles).padStart(4)} tiles, ${plants} plants  ${W}x${H}  ${(bytes.length / 1024).toFixed(0)} KB`);
 }
 
 // ── publish ──────────────────────────────────────────────────────────────────────

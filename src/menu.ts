@@ -1,5 +1,6 @@
 // Front-end menu shell. Owns all menu DOM/state; main.ts never reaches into this.
 import { getSetting, setSetting } from "./settings.ts";
+import { buildMenuScene } from "./menuScene.ts";
 
 export interface JoinOpts {
   name: string;
@@ -74,12 +75,61 @@ function showHomeError(text?: string): void {
   if (!el) {
     el = document.createElement("p");
     el.id = "menu-home-error";
-    el.style.cssText =
-      "margin:10px auto 0;max-width:34ch;color:#ffb0a0;background:rgba(60,14,14,.75);" +
-      "border:1px solid #8b3a2e;border-radius:8px;padding:8px 12px;font:13px/1.4 monospace;text-align:center";
-    document.getElementById("menu-home")?.appendChild(el);
+    el.className = "home-error";
+    document.querySelector("#menu-home .home-col")?.appendChild(el);
   }
   el.textContent = text;
+}
+
+/**
+ * The title menu behaves like a game's: one choice is always selected (hover, focus
+ * and the arrow keys or W / S move it), its hint shows below, Enter picks it.
+ */
+function wireMainMenu(menu: HTMLElement): void {
+  const items = Array.from(menu.querySelectorAll<HTMLButtonElement>(".main-menu .mm"));
+  const hint = document.getElementById("menu-hint");
+  let sel = 0;
+  const select = (i: number, focus: boolean) => {
+    sel = (i + items.length) % items.length;
+    items.forEach((b, k) => b.classList.toggle("sel", k === sel));
+    if (hint) hint.textContent = items[sel].dataset.hint || "";
+    if (focus) items[sel].focus();
+  };
+  items.forEach((b, k) => {
+    b.addEventListener("mouseenter", () => select(k, false));
+    b.addEventListener("focus", () => select(k, false));
+  });
+  window.addEventListener("keydown", (e) => {
+    if (menu.style.display === "none" || menu.dataset.screen !== "home") return;
+    const k = e.key;
+    if (k === "ArrowDown" || k === "s" || k === "S") select(sel + 1, true);
+    else if (k === "ArrowUp" || k === "w" || k === "W") select(sel - 1, true);
+    else if (k === "Home") select(0, true);
+    else if (k === "End") select(items.length - 1, true);
+    else if (k === "Enter" && !items.includes(document.activeElement as HTMLButtonElement)) items[sel].click();
+    else return;
+    e.preventDefault();
+  });
+}
+
+/**
+ * The key art leans with the pointer: two custom properties, at most once a frame; the
+ * CSS turns them into translations of the ridges and the camp, so nothing repaints.
+ * Off for touch and for reduced motion.
+ */
+function wireParallax(menu: HTMLElement): void {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches || !matchMedia("(pointer: fine)").matches) return;
+  let raf = 0, mx = 0, my = 0;
+  const apply = () => {
+    raf = 0;
+    menu.style.setProperty("--mx", mx.toFixed(3));
+    menu.style.setProperty("--my", my.toFixed(3));
+  };
+  menu.addEventListener("pointermove", (e) => {
+    mx = (e.clientX / window.innerWidth) * 2 - 1;
+    my = (e.clientY / window.innerHeight) * 2 - 1;
+    if (!raf) raf = requestAnimationFrame(apply);
+  });
 }
 
 export function initMenu(onJoin: (opts: JoinOpts) => void): void {
@@ -181,6 +231,9 @@ export function initMenu(onJoin: (opts: JoinOpts) => void): void {
   }
 
   // Home navigation
+  document.getElementById("menu-play-btn")!.addEventListener("click", () => {
+    ensureNameThen(() => finishJoin(""));
+  });
   document
     .getElementById("menu-create-btn")!
     .addEventListener("click", () => {
@@ -283,6 +336,10 @@ export function initMenu(onJoin: (opts: JoinOpts) => void): void {
     showMenu((e as CustomEvent)?.detail?.error),
   );
 
+  const backdrop = document.getElementById("menu-backdrop");
+  if (backdrop) buildMenuScene(backdrop);
+  wireMainMenu(menu);
+  wireParallax(menu);
   refreshHome();
   showScreen("home");
   menu.style.display = "flex";

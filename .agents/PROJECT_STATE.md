@@ -1,7 +1,7 @@
 # Project state — Wyldra
 
-**Last updated:** 2026-10-18 · branch `dev` · session dump:
-`session-context-dump/2026-09-20_1700__modular-building.md`
+**Last updated:** 2026-10-18 · branch `feat/advance-enemy-ai` (uncommitted) · session dump:
+`session-context-dump/2026-10-18_2030__advanced-enemy-ai.md`
 
 This is the status source of truth. Update it in the same pass as any session dump.
 It describes the project **as it is now** — history lives in the session dumps.
@@ -229,6 +229,25 @@ shed pressure and their mud turns back to grass (12% per 30 s pass per tile), an
 reclaims the nearest soured tile. Nothing heals or regrows through a building, farm, module or
 blight; healed tiles go out as `regrow`. Creatures walk over farm plots instead of gnawing them
 (that bug destroyed crops). The client hides world decor under built tiles.
+
+### Title screen: the Whispering Woods
+`index.html` (`#menu`) is laid out like a game title screen: the logo and a vertical menu on the
+left — **Play** (straight into the shared world), Create room, Join room, Settings; one choice is
+always selected, hover / focus / arrow keys / W-S move it, its hint shows below, Enter picks it
+(`menu.ts wireMainMenu`). Behind it, a Woods landscape running off every edge (the owner asked for
+no island ringed by water): terraced meadows of the game's grass / flower-grass tiles with soil
+cliffs, a river winding down the valley to a coast in the near-right corner, and the game's own
+pine, oak and autumn trees, bushes and glowcaps — no characters or animals (owner's request).
+Golden-hour light, drifting cloud shadows and rising motes are CSS over it; the layers lean with
+the pointer (`wireParallax`). The scene is a deterministic height map (`src/menuArt.ts`,
+`BACKDROPS[BACKDROP]`; a Frozen Spire island is the other choice) that
+`tools/atlas/build-atlases.mjs` renders with resvg into one PNG (`assets/atlas/menu-<biome>.<hash>.png`,
+`atlas.json menuBackdrop` with its biome and frame, ~0.9 MB for the Woods): tile columns stacked
+one tile-thickness apart, each plant drawn right after its own column, a 1700 x 1000 window cut
+from inside a 64-cell grid. `src/menuScene.ts` hangs the picture once decoded and sets
+`#menu[data-biome][data-frame]` for the CSS. Measured: ~0.6% main thread steady, zero
+main-thread paints, ~1.1 s at load (the original menu ~1.2 s); 80 DOM nodes. Inspect a moment by
+freezing animations with `#menu * { animation-delay: -Ns !important; animation-play-state: paused !important }`.
 
 ### Dev tooling
 F9 kit and F10 panel, gated on the ticket's `dev` claim. `HEARTH_DEV_ALL=1` (set by
