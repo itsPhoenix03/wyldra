@@ -140,7 +140,10 @@ type Room struct {
 	nodeHP      map[int]int   // tile -> remaining hp, only while damaged
 	removed     map[int]int64 // tile -> wall-clock ms at which the node returns
 	mudTiles    map[int]bool
-	sectorChops map[int]int // 16x16 sector key -> trees felled
+	sectorChops map[int]int // 16x16 sector key -> felling pressure (ecology.go)
+	// sectorChopAt: when a tree was last felled in each sector, wall-clock ms.
+	// Not saved: after a restart every sector counts as rested (ecology.go).
+	sectorChopAt map[int]int64
 	// harm is how much each keeper (by userId) has hurt each island's land:
 	// trees felled, ground blighted, game killed (folk_regard.go). It fades with
 	// time and is not saved: a restart is a fresh start with the folk.
@@ -294,6 +297,7 @@ func New(cfg Config) (*Room, error) {
 		removed:       map[int]int64{},
 		mudTiles:      map[int]bool{},
 		sectorChops:   map[int]int{},
+		sectorChopAt:  map[int]int64{},
 		harm:          map[string]map[string]float64{},
 		farms:         map[int]*Farm{},
 		modules:       map[string]*Module{},

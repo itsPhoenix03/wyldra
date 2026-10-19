@@ -2,6 +2,7 @@ package room
 
 import (
 	"math"
+	"sort"
 
 	"hearth/gameserver/world"
 )
@@ -22,6 +23,7 @@ func (r *Room) onSimTick() {
 
 	// --- node respawns (every 5s) ---
 	if r.tickN%25 == 0 {
+		var grew []int // trees back this pass, healed in tile order (map order is random)
 		for i, at := range r.removed {
 			if now <= at {
 				continue
@@ -34,7 +36,19 @@ func (r *Room) onSimTick() {
 			}
 			delete(r.removed, i)
 			r.broadcast(map[string]any{"t": "node", "i": i, "hp": -1})
+			if r.world.Nodes[i] == world.NodeTree {
+				grew = append(grew, i)
+			}
 		}
+		sort.Ints(grew)
+		for _, i := range grew {
+			r.ecoTreeRegrew(i)
+		}
+	}
+
+	// --- the land heals: soured ground in rested sectors turns back to grass ---
+	if r.tickN%ecoPassTicks == 0 {
+		r.ecologyTick(now)
 	}
 
 	// --- weather fronts: rain (Woods/Marsh), sandstorm (Dunes),

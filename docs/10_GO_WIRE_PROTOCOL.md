@@ -137,7 +137,7 @@ covers well beyond the viewport at any supported zoom.
   "waterTemp": "<base64 RLE>",   // 0 temperate, 1 freezing, 2 hot
   "tileVis":   "<base64 RLE>",   // 0/1 decorative variant flag
   "nodes": [[localIdx, kind], ...],     // resource nodes currently present
-  "decor": [[localIdx, "key"], ...],    // static decor prop keys
+  "decor": [[localIdx, "key"], ...],    // static decor prop keys (the client hides one under anything built on its tile)
   "bergs": [localIdx, ...],             // iceberg water tiles
   "digs":  [localIdx, ...],             // carved mine tiles (z=1) in this chunk
   "structs": [[localIdx, "kind", hp, dir, lvl], ...]  // player structures
@@ -290,7 +290,7 @@ the player owns one.
 
 `inv`, `msg`, `stat`, `hp`, `act`, `actReject`, `node`, `dig`, `build`, `sd`,
 `crop`, `furn`, `torch`, `chest`, `mud`, `berg`, `boat`, `wave`, `win` — all
-identical in shape to the legacy server. `stat` is
+identical in shape to the legacy server. `regrow` is Go-only (§8.6). `stat` is
 `{ "t": "stat", "hunger": <int>, "thirst": <int> }`: both values are `ceil()` of the
 fractional simulation state, exactly as `Math.ceil(p.hunger)` in `server/index.js`. See §3.
 
@@ -347,6 +347,30 @@ clocks, because neither clock survives a restart: node respawns as milliseconds
 remaining, and farms as ticks elapsed since planting.
 
 ---
+
+### 8.6 The land heals
+
+`gameserver/room/ecology.go`. Felling trees puts pressure on a 16×16 sector; the 8th felling
+sours up to 14 of its grass tiles to mud (`mud`, as before) and the pressure starts over. Ground
+under anything built never sours. Then the land recovers on its own:
+
+- **Rest.** A sector where no tree has been felled for 2 minutes is resting (fellings are not
+  saved, so after a restart every sector rests). Every 30 s a resting sector sheds one felling of
+  pressure, and each of its soured tiles turns back to grass with a 12% chance — about four
+  minutes for a tile on average.
+- **Regrowth.** A felled tree that grows back eases its sector by one felling and reclaims the
+  nearest soured tile within 3 tiles (ties to the lower tile index), resting or not.
+- **Never through a building or the blight.** A soured tile under a structure, a farm or any
+  module slot, or under corruption, stays mud until it is clear.
+
+```jsonc
+{ "t": "regrow", "tiles": [152487, 152490] }   // ascending tile indices, now grass again
+```
+
+The chunk overlay's `mud` list (§8.3) only ever carries tiles that are still soured. Creatures
+walk over farm plots like any open decor; only a blocking structure is gnawed (a hunter crossing
+a field used to chew the plot and its crop away). The legacy server sours ground but never heals
+it, and sends no `regrow`.
 
 ## 9. Slice 3 — creatures, wildlife, weather, creature combat
 

@@ -829,8 +829,10 @@ func (r *Room) stepCreature(c *Creature, strength int, nowMs int64) {
 
 	s := r.structures[ni]
 	switch {
-	case s != nil && r.defs.DecorNonBlk[s.Kind]:
-		// creatures walk over non-blocking decor
+	case s != nil && !r.creBlocked(ni):
+		// creatures walk over non-blocking decor and farm plots. Steering lets
+		// them step there, so only a blocking structure may be gnawed: a hunter
+		// crossing a field used to chew the plot (and its crop) to nothing.
 		c.X, c.Y = nx, ny
 	case s != nil && distT > 1.2 && typ != "bog_shambler" && mode == aiHunt:
 		// bog_shambler ignores structures; only a hunt gnaws through

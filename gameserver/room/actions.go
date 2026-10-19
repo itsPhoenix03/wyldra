@@ -115,7 +115,7 @@ func (r *Room) handleGather(p *Player, m map[string]any) {
 
 	if kind == int(world.NodeTree) {
 		r.addHarm(p, x, y, harmTree)
-		if r.chopEcosystem(int(x), int(y)) {
+		if r.chopEcosystem(int(x), int(y), now) {
 			r.addHarm(p, x, y, harmBlight)
 		}
 	}
@@ -163,17 +163,22 @@ func (r *Room) clearBuiltOverNodes() {
 
 // chopEcosystem is the legacy tree reaction: every 8th tree felled in a 16x16
 // sector turns a few grass tiles to mud. It reports whether any ground turned.
-func (r *Room) chopEcosystem(x, y int) bool {
-	sk := ((x >> 4) << 8) | (y >> 4)
+// The pressure starts over once the ground sours, so the land can work it back
+// down while it rests (ecology.go) without a single felling re-souring it; and
+// ground under a building never sours, since it could never heal.
+func (r *Room) chopEcosystem(x, y int, now int64) bool {
+	sk := sectorOf(x, y)
+	r.sectorChopAt[sk] = now
 	r.sectorChops[sk]++
-	if r.sectorChops[sk]%8 != 0 {
+	if r.sectorChops[sk] < ecoSourAt {
 		return false
 	}
+	delete(r.sectorChops, sk)
 	var newMud []int
 	bx, by := (x>>4)<<4, (y>>4)<<4
 	for n := 0; n < 40 && len(newMud) < 14; n++ {
 		mi := ti(float64(bx)+rand.Float64()*16, float64(by)+rand.Float64()*16)
-		if r.tileAt(mi) == world.TGrass && !r.mudTiles[mi] {
+		if r.tileAt(mi) == world.TGrass && !r.mudTiles[mi] && !r.tileBuiltOn(mi) {
 			if _, isNode := r.world.Nodes[mi]; !isNode {
 				r.mudTiles[mi] = true
 				newMud = append(newMud, mi)

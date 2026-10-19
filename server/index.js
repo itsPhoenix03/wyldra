@@ -947,8 +947,12 @@ setInterval(() => {
   // node respawns
   if (tickN % 25 === 0) {
     const now = Date.now();
-    for (const [i, at] of removed)
-      if (now > at) { removed.delete(i); bcast({ t: 'node', i, hp: -1 }); }
+    for (const [i, at] of removed) {
+      if (now <= at) continue;
+      // nothing regrows through what has been built on its tile: check again in a minute
+      if (structures.has(i) || farms.has(i) || medicTiles.has(i)) { removed.set(i, now + 60000); continue; }
+      removed.delete(i); bcast({ t: 'node', i, hp: -1 });
+    }
   }
 
   // weather events: rain (Woods/Marsh), sandstorm (Dunes), snowstorm (Spire)
@@ -1350,7 +1354,8 @@ setInterval(() => {
 
     const s = structures.get(ni);
     // creatures skip non-blocking decor (not fence — fence is blocking so it won't appear here)
-    if (s && DECOR_NONBLOCKING.has(s.kind)) { c.x = nx; c.y = ny; }
+    // farm plots are walked over too: a hunter crossing a field must not chew the plot and its crop
+    if (s && (DECOR_NONBLOCKING.has(s.kind) || s.kind === 'farmplot')) { c.x = nx; c.y = ny; }
     else if (s && distT > 1.2 && c.type !== 'bog_shambler') {  // bog_shambler ignores structures
       if (tickN % 5 === 0) {
         s.hp -= (c.type === 'brute') ? 3 : 1;

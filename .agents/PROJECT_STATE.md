@@ -222,6 +222,14 @@ a scripted squad; "↺ Reset" (`devcmd monoreset`) puts every monolith back to d
 docs/10 §13.6. Balance note: a crawler deals ~0.83 hp/s to a keeper who stands still
 (was 1.0); a hugged brute slams every ~2 s for 2 to everyone within 1.4 (was 2 per second).
 
+### Ecology: the land heals
+Over-felling still sours a sector's grass to mud (every 8th tree in a 16×16 sector), but it now
+recovers (`gameserver/room/ecology.go`, docs/10 §8.6): resting sectors (2 min without a felling)
+shed pressure and their mud turns back to grass (12% per 30 s pass per tile), and a regrown tree
+reclaims the nearest soured tile. Nothing heals or regrows through a building, farm, module or
+blight; healed tiles go out as `regrow`. Creatures walk over farm plots instead of gnawing them
+(that bug destroyed crops). The client hides world decor under built tiles.
+
 ### Dev tooling
 F9 kit and F10 panel, gated on the ticket's `dev` claim. `HEARTH_DEV_ALL=1` (set by
 `npm run start:dev`) grants it to **loopback requests only** — checked per-request, not on the

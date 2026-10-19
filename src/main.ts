@@ -20,6 +20,7 @@ import {
   DECOR_NONBLOCKING,
   FURNITURE,
   MODULES,
+  MODULE_SLOTS,
 } from "../shared/defs.js";
 import { isNightTime, NIGHT_START } from "../shared/time.js";
 import { Rig, type RigStatus } from "./rig.ts";
@@ -301,6 +302,7 @@ class Hearth extends Phaser.Scene {
   monoSpr: Phaser.GameObjects.Sprite[] = [];
   creSpr = new Map<string, Phaser.GameObjects.Sprite>();
   private teleN = 0;   // live ground telegraphs (aim line, charge strip, rally ring), capped
+  private healMsgAt = -1e9;   // last "the land is healing" toast (they come in waves)
   aniSpr = new Map<string, Phaser.GameObjects.Sprite>();
   nodeSpr = new Map<number, Phaser.GameObjects.Sprite>();
   structSpr = new Map<
@@ -1886,6 +1888,18 @@ class Hearth extends Phaser.Scene {
         this.setTileMut(i, "mud");
       }
       showMsg("The soil sours — this sector's ecosystem is collapsing!");
+    } else if (m.t === "regrow") {
+      // the land heals: soured ground turns back to grass (a blighted tile keeps its blight until cured)
+      let near = false;
+      for (const i of m.tiles) {
+        this.mud.delete(i);
+        if (this.mutTiles.get(i) === "mud") this.setTileMut(i, null);
+        if (Math.hypot((i % SIZE) - this.px, ((i / SIZE) | 0) - this.py) < 20) near = true;
+      }
+      if (near && this.time.now - this.healMsgAt > 90000) {
+        this.healMsgAt = this.time.now;
+        showMsg("🌱 The land is healing — grass reclaims the soured soil.", 3000);
+      }
     } else if (m.t === "dig") {
       if (m.by === this.id && m.seq === this.pendingActSeq) this.audio.chop();
       if (m.by === this.id && m.tiles?.length) {
@@ -1924,7 +1938,8 @@ class Hearth extends Phaser.Scene {
     } else if (m.t === "infect") {
       for (const i of m.tiles) this.setTileMut(i, "blight");
     } else if (m.t === "cure") {
-      for (const i of m.tiles) this.setTileMut(i, null);
+      // the blight lifts to whatever lies under it: soured ground stays mud
+      for (const i of m.tiles) this.setTileMut(i, this.mud.has(i) ? "mud" : null);
     } else if (m.t === "wx") {
       this.weather = m.kind;
       if (m.kind === "rain") showMsg("🌧 Rain sweeps across the lowlands.");
@@ -1988,6 +2003,7 @@ class Hearth extends Phaser.Scene {
           ex.destroy();
           this.exitSpr.delete(m.i);
         }
+        this.syncDecor(m.i); // the ground's own decor shows again
       } else {
         s.hp = m.hp;
         this.tweens.add({
@@ -2387,7 +2403,8 @@ class Hearth extends Phaser.Scene {
     const ds = this.add
       .image(dp.x, dp.y, key)
       .setOrigin(0.5, 0.92)
-      .setDepth(dp.y + 18); // lifted ground y, like every mover (see trackLift)
+      .setDepth(dp.y + 18) // lifted ground y, like every mover (see trackLift)
+      .setVisible(!this.tileBuilt(i));
     this.decorSpr.set(i, ds);
   }
 
@@ -2537,12 +2554,27 @@ class Hearth extends Phaser.Scene {
     spr.setScale(0.6).setY(finalY - 10);
     this.tweens.add({ targets: spr, scaleX: 1, scaleY: 1, y: finalY, duration: 160, ease: "Back.easeOut" });
     this.modSpr.set(key, spr);
+    this.syncDecor(i);
   }
 
   removeModule(i: number, slot: string) {
     const key = `${i}:${slot}`;
     this.modSpr.get(key)?.destroy();
     this.modSpr.delete(key);
+    this.syncDecor(i);
+  }
+
+  /** Something (a structure or any module slot) is built on tile i. */
+  private tileBuilt(i: number) {
+    if (this.structSpr.has(i)) return true;
+    for (const slot of MODULE_SLOTS as string[]) if (this.modSpr.has(`${i}:${slot}`)) return true;
+    return false;
+  }
+
+  /** World decor (glow mushrooms, totems...) hides under whatever is built on its tile, and returns when it goes. */
+  private syncDecor(i: number) {
+    const ds = this.decorSpr.get(i);
+    if (ds) ds.setVisible(!this.tileBuilt(i));
   }
 
   applyChunkMsg(m: ChunkMsg) {
@@ -2713,6 +2745,7 @@ class Hearth extends Phaser.Scene {
     const glowA = this.z !== 0 ? 0.03 : 0.1;
     entry.glow?.setAlpha(glowA).setData("baseA", glowA);
     this.structSpr.set(i, entry);
+    this.syncDecor(i);
   }
 
   addTorch(i: number) {
