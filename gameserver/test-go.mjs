@@ -837,7 +837,7 @@ console.log('DEV kit refused OK, with accurate advice:', ndKitMsg.s);
 // to every player on their own schedule, so its presence proves nothing either way. The
 // success toast each command emits is the reliable tell, and the Go unit test
 // room.TestDevRefusedWithoutClaimMutatesNothing asserts the room state field by field.
-const DEV_SUCCESS_TOASTS = /God mode|Spawned |Cleared \d+ monsters|Killed|Time set to|DEV KIT/;
+const DEV_SUCCESS_TOASTS = /God mode|Spawned |Cleared \d+ monsters|Killed|Time set to|DEV KIT|AI test|Monoliths reset/;
 const REFUSE_CASES = [
   ['tp', { cmd: 'tp', x: MONOLITHS[1][0], y: MONOLITHS[1][1] }, ['pos']],
   ['mono', { cmd: 'mono', i: 0 }, ['mono']],
@@ -847,11 +847,13 @@ const REFUSE_CASES = [
   ['spawn', { cmd: 'spawn', type: 'brute' }, []],
   ['clearcre', { cmd: 'clearcre' }, []],
   ['kill', { cmd: 'kill' }, ['pos']],
+  ['aitest', { cmd: 'aitest', kind: 'pack' }, []],
+  ['monoreset', { cmd: 'monoreset' }, ['monoreset']],
 ];
 for (const [name, frame, forbidden] of REFUSE_CASES) {
   const chunksBefore = ND.chunks;
   const clockBefore = lastOf(ND, 'cre')?.time;
-  ND.msgs = ND.msgs.filter((m) => !['msg', 'mono', 'wx', 'pos', 'inv'].includes(m.t));
+  ND.msgs = ND.msgs.filter((m) => !['msg', 'mono', 'monoreset', 'wx', 'pos', 'inv'].includes(m.t));
   ND.send({ t: 'devcmd', ...frame }); await sleep(450);
   const refusal = ND.msgs.find((m) => m.t === 'msg' && /Dev tools off/.test(m.s));
   if (!refusal) fail(`DEV: devcmd ${name} was not refused: ${JSON.stringify(ND.msgs.filter((m) => m.t === 'msg'))}`);
@@ -1331,6 +1333,25 @@ for (const type of CRE_TYPE_KEYS) {
 }
 console.log(`DEVOK spawn OK: all ${CRE_TYPE_KEYS.length} creature types spawned and broadcast`);
 
+// devcmd `aitest`: the wolf pack arrives in a `cre` frame carrying levels — the crowned
+// Lv5 alpha among them — which also proves the level column reaches the client.
+{
+  D.msgs = D.msgs.filter((m) => m.t !== 'cre' && m.t !== 'msg');
+  D.send({ t: 'devcmd', cmd: 'aitest', kind: 'pack' });
+  let rows = null;
+  const t0 = Date.now();
+  while (!rows && Date.now() - t0 < 4000) {
+    const wolves = (D.msgs.filter((m) => m.t === 'cre').pop()?.c || []).filter((row) => row[3] === 'husk_wolf');
+    if (wolves.length >= 4) rows = wolves;
+    else await sleep(100);
+  }
+  if (!rows) fail('DEVOK: devcmd aitest pack never broadcast its four wolves');
+  if (!rows.some((row) => row[4] === 5)) fail('DEVOK: aitest pack has no Lv5 alpha in the cre frame: ' + JSON.stringify(rows));
+  if (!D.msgs.some((m) => m.t === 'msg' && /AI test — Wolf pack/.test(m.s)))
+    fail('DEVOK: devcmd aitest sent no scenario toast');
+  console.log('DEVOK aitest OK: wolf pack spawned with its levels, alpha included');
+}
+
 // devcmd `clearcre`: every creature currently alive is gone. Asserted on identity rather than
 // on an empty frame: the natural spawn roll runs inside the very same tick that processes the
 // command, so at night the world is rarely observably empty even though the clear did happen.
@@ -1378,6 +1399,14 @@ console.log(`DEVOK spawn OK: all ${CRE_TYPE_KEYS.length} creature types spawned 
     fail('DEVOK: after lighting all four, a fresh init still reports mono = ' + JSON.stringify(initFresh.mono));
   fresh.ws.close();
   console.log('DEVOK mono OK: all four lit and carried in init.mono');
+
+  // devcmd `monoreset`: all four back to dormant, told to every client
+  D.msgs = D.msgs.filter((m) => m.t !== 'monoreset' && m.t !== 'msg');
+  D.send({ t: 'devcmd', cmd: 'monoreset' });
+  await D.wait('monoreset', 3000);
+  if (!D.msgs.some((m) => m.t === 'msg' && /Monoliths reset — all four dormant \(4 were lit\)/.test(m.s)))
+    fail('DEVOK: monoreset sent no toast counting the four it put out');
+  console.log('DEVOK monoreset OK: all four dormant again');
 }
 
 // devcmd `kill`: respawn with full vitals, and the movement grace window that keeps the

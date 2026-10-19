@@ -112,6 +112,7 @@ func (r *Room) creatureDied(p *Player, c *Creature, now int64) {
 	}
 	r.packEnrage(c)
 	r.alertPack(c, p)
+	r.eliteOnKilled(c, p)
 	r.sendInv(p)
 }
 
@@ -131,6 +132,7 @@ func (r *Room) creatureSurvived(p *Player, c *Creature, atkAng float64, seq any,
 		c.X, c.Y = knx, kny
 	}
 	c.Stun = 3
+	r.attackInterrupted(c, c.Type)
 
 	// wisp / frost_wraith on hit: flee away from the attacker and corrupt where
 	// they stood
@@ -145,6 +147,8 @@ func (r *Room) creatureSurvived(p *Player, c *Creature, atkAng float64, seq any,
 	}
 	r.packEnrage(c)
 	r.alertPack(c, p)
+	r.baseOnStruck(c, p)
+	r.eliteOnStruck(c, p)
 	r.broadcast(map[string]any{"t": "chit", "id": c.ID, "ang": atkAng, "by": p.S.ID, "seq": seq})
 }
 

@@ -91,6 +91,8 @@ func TestDevRefusedWithoutClaimMutatesNothing(t *testing.T) {
 		{"cmd": "spawn", "type": "crawler"},
 		{"cmd": "clearcre"},
 		{"cmd": "kill"},
+		{"cmd": "aitest", "kind": "pack"},
+		{"cmd": "monoreset"},
 	}
 	for _, fr := range frames {
 		cmd, _ := fr["cmd"].(string)
@@ -402,22 +404,27 @@ func TestDevGodSurvivesCreatureContactAndEnvironment(t *testing.T) {
 		t.Fatal("god did not switch on")
 	}
 
-	// A brute does 2 contact damage; contact fires on tickN%5. Twenty rounds of
-	// it is ten times the player's whole hp pool, so an ungodded player would
-	// have been respawned many times over.
-	c := f.spawnAt("brute", gx+0.5, gy, false)
-	for i := 0; i < 20; i++ {
-		f.r.tickN = 5
-		f.r.creatureContact(c, creTypes["brute"].dmg, false, f.now)
-		f.r.tickN = 4 // onTick increments to 5 again
+	// A brute slams for 2 about every ten ticks once it is on the keeper. A
+	// hundred and twenty ticks of it is more than twice the player's whole hp
+	// pool, so an ungodded player would have been respawned several times over.
+	f.spawnAt("brute", gx+0.5, gy, false)
+	slams := 0
+	for i := 0; i < 120; i++ {
 		f.r.onTick()
-		f.drain() // the outbound queue is 96 deep; a dropped player would stop ticking
+		for _, m := range f.drain() { // the outbound queue is 96 deep; a dropped player would stop ticking
+			if m["t"] == "hp" && m["ang"] != nil {
+				slams++
+			}
+		}
 		if f.p.HP <= 0 {
 			t.Fatalf("god mode: hp fell to %d on round %d", f.p.HP, i)
 		}
 		if f.p.X != gx || f.p.Y != gy {
 			t.Fatalf("god mode: the player was respawned to %v,%v on round %d", f.p.X, f.p.Y, i)
 		}
+	}
+	if slams < 6 {
+		t.Fatalf("god mode: only %d creature blows landed in 120 ticks; the brute never really fought", slams)
 	}
 	// The mechanism: godTick puts a protected player back to full at the top of
 	// every tick, so any chip taken inside a tick is gone before the next one.
@@ -459,8 +466,7 @@ func TestDevGodSurvivesCreatureContactAndEnvironment(t *testing.T) {
 		t.Error("switching god off produced no toast saying so")
 	}
 	c2 := f.spawnAt("crawler", gx+0.5, gy, false)
-	f.r.tickN = 5
-	f.r.creatureContact(c2, creTypes["crawler"].dmg, false, f.now)
+	f.run(c2, 3) // windup, then the strike
 	if f.p.HP != f.r.defs.MaxHP-1 {
 		t.Fatalf("with god off, contact left hp at %d, want %d", f.p.HP, f.r.defs.MaxHP-1)
 	}
@@ -548,7 +554,8 @@ func TestDevSpawnEveryCreatureType(t *testing.T) {
 			found := false
 			for _, e := range list {
 				row, _ := e.([]any)
-				if len(row) == 4 && row[0] == c.ID && row[3] == typ {
+				// id, x, y, type, level — a dev spawn is level 1 (docs/10 §13.6)
+				if len(row) == 5 && row[0] == c.ID && row[3] == typ && row[4] == float64(1) {
 					found = true
 				}
 			}
@@ -705,6 +712,75 @@ func TestDevMonoRejectsBadIndex(t *testing.T) {
 	}
 	if f.r.mono != [4]bool{} {
 		t.Fatalf("a bad mono index lit something: %v", f.r.mono)
+	}
+}
+
+// monoreset puts every monolith back to dormant, drops strength with it, and
+// tells every client.
+func TestDevMonoReset(t *testing.T) {
+	f := devFixture(t)
+	f.devcmd(map[string]any{"cmd": "mono", "i": 0.0})
+	f.devcmd(map[string]any{"cmd": "mono", "i": 2.0})
+	f.drain()
+	f.devcmd(map[string]any{"cmd": "monoreset"})
+	if f.r.mono != [4]bool{} {
+		t.Fatalf("mono after reset = %v, want all dormant", f.r.mono)
+	}
+	if f.r.strength() != 1 {
+		t.Fatalf("strength after reset = %d, want 1", f.r.strength())
+	}
+	out := f.drain()
+	if countType(out, "monoreset") != 1 {
+		t.Fatalf("want one monoreset broadcast, got %v", out)
+	}
+	if !hasMsgContaining(f.msgsOf(out), "2 were lit") {
+		t.Errorf("reset toast does not say how many were lit: %v", f.msgsOf(out))
+	}
+	// a monolith can be lit again afterwards
+	f.devcmd(map[string]any{"cmd": "mono", "i": 0.0})
+	if !f.r.mono[0] {
+		t.Fatal("monolith 0 would not light again after a reset")
+	}
+}
+
+// aitest clears the arena and drops each scenario's squad, at its levels, near
+// the tester, with no home tile so it commits to the fight.
+func TestDevAITestScenarios(t *testing.T) {
+	for kind, sc := range devAIScenarios {
+		t.Run(kind, func(t *testing.T) {
+			f := devFixture(t)
+			gx, gy := landPatch(t, f.r, world.TGrass, 12)
+			f.place(gx, gy, 0)
+			f.spawnAt("wisp", gx+3, gy, true) // swept away by the reset
+			f.drain()
+			f.devcmd(map[string]any{"cmd": "aitest", "kind": kind})
+			if len(f.r.creOrder) != len(sc.squad) || len(f.r.creatures) != len(sc.squad) {
+				t.Fatalf("%d creatures (%d in creOrder), want the squad's %d",
+					len(f.r.creatures), len(f.r.creOrder), len(sc.squad))
+			}
+			for k, c := range f.r.creOrder {
+				want := sc.squad[k]
+				if c.Type != want.typ || c.Level != want.lvl {
+					t.Errorf("member %d is %s Lv%d, want %s Lv%d", k, c.Type, c.Level, want.typ, want.lvl)
+				}
+				if c.HasHome {
+					t.Errorf("member %d has a home tile: it would leash away from the test", k)
+				}
+				if d := math.Hypot(c.X-gx, c.Y-gy); d > 12 {
+					t.Errorf("member %d landed %.1f tiles away", k, d)
+				}
+			}
+			if !hasMsgContaining(f.msgsOf(f.drain()), sc.name) {
+				t.Error("no toast naming the scenario")
+			}
+		})
+	}
+	// an unknown kind changes nothing
+	f := devFixture(t)
+	f.spawnAt("crawler", f.p.X+3, f.p.Y, true)
+	f.devcmd(map[string]any{"cmd": "aitest", "kind": "nope"})
+	if len(f.r.creatures) != 1 {
+		t.Fatalf("an unknown aitest kind touched the creatures: %d left", len(f.r.creatures))
 	}
 }
 
