@@ -726,9 +726,11 @@ wss.on('connection', (ws) => {
       const atkClip = p.equip === 'axe' ? 'chop' : (p.equip === 'pick' || p.equip === 'spick') ? 'mine' : (p.equip === 'sword' || p.equip === 'isword') ? 'slash' : 'punch';
       bcast({ t: 'act', id, seq, a: atkClip, tool: p.equip, dx: clampDir(m.dx), dy: clampDir(m.dy), targetI: bid });
       if (!best) {
-        // no creature in range: strike a structure to demolish it (half materials refunded)
+        // no creature in range: strike a structure to demolish it (half materials refunded).
+        // Never the World Engine: only the Blight may bring it down.
         let bsi = -1, bsd = 2.4;
         for (const [si, s] of structures) {
+          if (s.kind === 'engine') continue;
           const d = Math.hypot((si % SIZE) - p.x, ((si / SIZE) | 0) - p.y);
           if (d < bsd) { bsd = d; bsi = si; }
         }
@@ -746,7 +748,6 @@ wss.on('connection', (ws) => {
           bcast({ t: 'sd', i: bsi, hp: 0 });
           sendInv(id, p);
           send(ws, { t: 'msg', s: `Demolished ${s.kind}${back.length ? ' — recovered ' + back.join(', ') : ''}` });
-          if (wave && bsi === wave.engineI) { wave = null; bcast({ t: 'wave', secs: 0 }); bcast({ t: 'msg', s: 'You destroyed your own World Engine!' }); }
         } else bcast({ t: 'sd', i: bsi, hp: s.hp });
         return;
       }

@@ -523,32 +523,55 @@ func TestWaveVictory(t *testing.T) {
 	}
 }
 
-// Demolishing your own Engine mid-assault cancels the wave and says so.
-func TestSelfDestroyedEngineCancelsWave(t *testing.T) {
+// A keeper's swing never touches the World Engine — not during the assault,
+// not after victory — so defenders can fight beside it. Only the Blight brings
+// it down. A wall next to it is still demolished as usual.
+func TestKeeperCannotDemolishEngine(t *testing.T) {
 	f := newFixture(t)
 	i := world.ACTIVATION_I
 	x, y := float64(i%world.SIZE), float64(i/world.SIZE)
 	f.stand(x+1, y, 0)
 	f.r.structures[i] = &Structure{Kind: "engine", HP: 2, Owner: f.p.S.ID, Lvl: 1}
 	f.r.wave = &waveState{until: f.now + 240000, engineI: i}
-	f.p.Equip = "isword" // 5 dmg, doubled for demolition
-	f.reset()
+	f.p.Equip = "isword" // 5 dmg, doubled for demolition: one swing would have done it
+	inv := f.p.Inv["wood"]
+	for n := 0; n < 5; n++ {
+		f.now += 500 // past the 400 ms swing cooldown
+		f.r.handleAtk(f.p, map[string]any{"t": "atk"})
+	}
+	if s := f.r.structures[i]; s == nil || s.HP != 2 {
+		t.Fatalf("a keeper's swings harmed the Engine: %+v", s)
+	}
+	if f.r.wave == nil {
+		t.Fatal("a keeper's swings cancelled the assault")
+	}
+	if f.p.Inv["wood"] != inv {
+		t.Fatal("swinging at the Engine refunded materials")
+	}
+	for _, m := range f.drain() {
+		if m["t"] == "sd" || (m["t"] == "wave" && m["secs"] == float64(0)) {
+			t.Fatalf("swinging at the Engine sent %v", m)
+		}
+	}
+
+	// after victory there is no wave, and the Engine still stands its ground
+	f.r.wave, f.r.won = nil, true
+	f.now += 500
 	f.r.handleAtk(f.p, map[string]any{"t": "atk"})
-	if f.r.wave != nil {
-		t.Fatal("demolishing the Engine did not cancel the wave")
+	if f.r.structures[i] == nil {
+		t.Fatal("a keeper demolished the Engine after victory")
 	}
-	f.seen = append(f.seen, f.drain()...)
-	var sawStop, sawMsg bool
-	for _, m := range f.seen {
-		if m["t"] == "wave" && m["secs"].(float64) == 0 {
-			sawStop = true
-		}
-		if m["t"] == "msg" && m["s"] == "You destroyed your own World Engine!" {
-			sawMsg = true
-		}
+
+	// a wall beside the Engine — nearer to the keeper or not — still comes down
+	wi := ti(x+2, y)
+	f.r.structures[wi] = &Structure{Kind: "wall", HP: 1, Owner: f.p.S.ID, Lvl: 1}
+	f.now += 500
+	f.r.handleAtk(f.p, map[string]any{"t": "atk"})
+	if _, ok := f.r.structures[wi]; ok {
+		t.Fatal("the wall beside the Engine was not demolished")
 	}
-	if !sawStop || !sawMsg {
-		t.Fatalf("expected wave secs:0 and the self-destruct message (stop=%v msg=%v)", sawStop, sawMsg)
+	if f.r.structures[i] == nil {
+		t.Fatal("demolishing the wall took the Engine with it")
 	}
 }
 

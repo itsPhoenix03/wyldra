@@ -604,7 +604,7 @@ While a wave is live:
 - a blight lancer's beam does **20** to the Engine rather than vaporising it outright, which is
   the only structure that survives a beam at all.
 
-Four things end a wave, and all four broadcast `{"t":"wave","secs":0}` so the client's
+Three things end a wave, and all three broadcast `{"t":"wave","secs":0}` so the client's
 countdown stops:
 
 | Ending | Extra broadcast |
@@ -612,7 +612,11 @@ countdown stops:
 | the timer runs out | `{"t":"win"}`, and `won` latches true |
 | a creature gnaws the Engine down | `msg` `THE WORLD ENGINE WAS DESTROYED! Rebuild it to try again.` |
 | a lancer beam finishes the Engine | the same `msg` |
-| a **player** demolishes their own Engine with `atk` | `msg` `You destroyed your own World Engine!` |
+
+A keeper cannot end it: `atk` never picks the Engine as a structure to demolish, during the wave
+or after it, so defenders can swing beside it freely (a swing next to it falls to the nearest
+other structure, if any). Earlier builds of both servers let a player demolish it, which
+cancelled the assault and refunded half its cost.
 
 `won` zeroes the creature cap for good and stops the nightly Blight Storm erosion of wooden
 structures. It is persisted, so a won world stays won across a restart. A destroyed Engine

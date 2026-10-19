@@ -898,9 +898,14 @@ func (r *Room) handleAtk(p *Player, m map[string]any) {
 	}
 
 	// no creature in range: strike a structure to demolish it (half the
-	// materials are refunded)
+	// materials are refunded). The World Engine is never a candidate: only the
+	// Blight may bring it down, so keepers defending it can swing freely beside
+	// it (and a demolition refund would have paid for a fresh one).
 	bsi, bsd := -1, 2.4
-	for si := range r.structures {
+	for si, ss := range r.structures {
+		if ss.Kind == "engine" {
+			continue
+		}
 		d := math.Hypot(float64(si%world.SIZE)-p.X, float64(si/world.SIZE)-p.Y)
 		if d < bsd {
 			bsd = d
@@ -948,11 +953,6 @@ func (r *Room) handleAtk(p *Player, m map[string]any) {
 		msg += " — recovered " + strings.Join(back, ", ")
 	}
 	r.send(p, map[string]any{"t": "msg", "s": msg})
-	if r.wave != nil && bsi == r.wave.engineI {
-		r.wave = nil
-		r.broadcast(map[string]any{"t": "wave", "secs": 0})
-		r.broadcast(map[string]any{"t": "msg", "s": "You destroyed your own World Engine!"})
-	}
 }
 
 // destroyStructure removes a structure and any crop growing on it. The legacy
