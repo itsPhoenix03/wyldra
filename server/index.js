@@ -155,6 +155,7 @@ const nearAnyStruct = (p, r) => {
   return false;
 };
 const nearStruct = (p, kind, r = 4) => {
+  if (p.z !== 0) return false;   // structures stand on the surface: no crafting through a mine's ceiling
   for (const [i, s] of structures)
     if (s.kind === kind && Math.hypot((i % SIZE) - p.x, ((i / SIZE) | 0) - p.y) <= r) return true;
   return false;
@@ -520,7 +521,7 @@ wss.on('connection', (ws) => {
       // zone enforcement: zone:'in' decor cannot be built outdoors (furn path handles them)
       if (r && r.zone === 'in') return;
       const x = i % SIZE, y = (i / SIZE) | 0;
-      if (Math.hypot(x - p.x, y - p.y) > 6) return;
+      if (p.z !== 0 || Math.hypot(x - p.x, y - p.y) > 6) return;   // built from the surface only
       const existing = structures.get(i);
       if (existing) {                 // stack: walls to 2 stories; nothing else stacks
         const maxLvl = kind === 'wall' ? 2 : 0;
@@ -579,7 +580,7 @@ wss.on('connection', (ws) => {
       if (!s || s.kind !== 'farmplot') return send(ws, { t: 'msg', s: 'No farm plot here.' });
       if (farms.has(i)) return send(ws, { t: 'msg', s: 'Something is already growing here.' });
       const x = i % SIZE, y = (i / SIZE) | 0;
-      if (Math.hypot(x - p.x, y - p.y) > 2.5) return;
+      if (p.z !== 0 || Math.hypot(x - p.x, y - p.y) > 2.5) return;   // farm plots are on the surface
       if (!canAfford(p.inv, cropDef.seedCost)) return send(ws, { t: 'msg', s: 'Not enough seeds.' });
       pay(p.inv, cropDef.seedCost);
       farms.set(i, { crop: cropName, plantedTick: tickN, owner: id });
@@ -597,7 +598,7 @@ wss.on('connection', (ws) => {
       const stage = Math.min(2, Math.floor(3 * (tickN - fm.plantedTick) / growTicks));
       if (stage < 2) return send(ws, { t: 'msg', s: `Not ready yet (${Math.floor(100 * (tickN - fm.plantedTick) / growTicks)}%).` });
       const x = i % SIZE, y = (i / SIZE) | 0;
-      if (Math.hypot(x - p.x, y - p.y) > 2.5) return;
+      if (p.z !== 0 || Math.hypot(x - p.x, y - p.y) > 2.5) return;   // farm plots are on the surface
       for (const [res, amt] of Object.entries(cropDef.yield)) p.inv[res] = (p.inv[res] || 0) + amt;
       farms.delete(i);
       bcast({ t: 'crop', i, crop: null, stage: 0 });

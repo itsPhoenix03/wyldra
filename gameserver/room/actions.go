@@ -226,7 +226,9 @@ func (r *Room) handleBuild(p *Player, m map[string]any) {
 		return
 	}
 	x, y := float64(i%world.SIZE), float64(i/world.SIZE)
-	if math.Hypot(x-p.X, y-p.Y) > 6 {
+	// structures go on the surface, built from the surface: never through the
+	// floor of a mine or a shelter
+	if p.Z != 0 || math.Hypot(x-p.X, y-p.Y) > 6 {
 		return
 	}
 	if existing, occupied := r.structures[i]; occupied {
@@ -417,7 +419,7 @@ func (r *Room) handlePlant(p *Player, m map[string]any) {
 		return
 	}
 	x, y := float64(i%world.SIZE), float64(i/world.SIZE)
-	if math.Hypot(x-p.X, y-p.Y) > 2.5 {
+	if p.Z != 0 || math.Hypot(x-p.X, y-p.Y) > 2.5 { // farm plots are on the surface
 		return
 	}
 	if !canAfford(p.Inv, cropDef.SeedCost) {
@@ -455,7 +457,7 @@ func (r *Room) handleHarvest(p *Player, m map[string]any) {
 		return
 	}
 	x, y := float64(i%world.SIZE), float64(i/world.SIZE)
-	if math.Hypot(x-p.X, y-p.Y) > 2.5 {
+	if p.Z != 0 || math.Hypot(x-p.X, y-p.Y) > 2.5 { // farm plots are on the surface
 		return
 	}
 	// Deterministic order so the harvest message is stable; the JS version

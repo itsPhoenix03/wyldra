@@ -289,6 +289,65 @@ func TestCropGrowthTiming(t *testing.T) {
 	}
 }
 
+// Stations, structures and farm plots live on the surface. Tile indices are
+// shared across layers, so every one of these used to be reachable from a mine
+// tunnel (or a shelter interior) directly beneath — crafting at a workbench
+// through the floor was the reported case.
+func TestNoReachThroughTheFloor(t *testing.T) {
+	f := newFixture(t)
+	x, y := float64(f.r.spawn[0]), float64(f.r.spawn[1])
+	f.r.structures[ti(x+1, y)] = &Structure{Kind: "workbench", HP: 15, Lvl: 1}
+	f.p.Inv["wood"], f.p.Inv["fiber"] = 100, 100
+
+	for _, z := range []int{1, 2} {
+		f.stand(x, y, z)
+		f.reset()
+		f.r.handleCraft(f.p, map[string]any{"t": "craft", "r": "axe"})
+		if f.p.Tools["axe"] || f.p.Inv["wood"] != 100 {
+			t.Fatalf("crafted at a surface workbench from z=%d (axe=%v wood=%d)", z, f.p.Tools["axe"], f.p.Inv["wood"])
+		}
+		if m := f.lastOfType("msg"); m == nil || m["s"] != "You must stand near a workbench to craft this." {
+			t.Fatalf("z=%d: expected the station message, got %v", z, m)
+		}
+	}
+	// the same spot on the surface is in range
+	f.stand(x, y, 0)
+	f.r.handleCraft(f.p, map[string]any{"t": "craft", "r": "axe"})
+	if !f.p.Tools["axe"] {
+		t.Fatal("the surface keeper could not craft at the workbench beside them")
+	}
+
+	// building, planting and harvesting from below are refused too
+	f.stand(x, y, 1)
+	f.p.Inv["wall"] = 1
+	wallI := ti(x, y+1)
+	f.r.handleBuild(f.p, map[string]any{"t": "build", "kind": "wall", "i": float64(wallI)})
+	if _, built := f.r.structures[wallI]; built || f.p.Inv["wall"] != 1 {
+		t.Fatal("built a wall on the surface from a mine tunnel")
+	}
+	plotI := ti(x-1, y)
+	f.r.structures[plotI] = &Structure{Kind: "farmplot", HP: 10, Lvl: 1}
+	f.r.handlePlant(f.p, map[string]any{"t": "plant", "i": float64(plotI), "crop": "wheat"})
+	if f.r.farms[plotI] != nil {
+		t.Fatal("planted a surface plot from a mine tunnel")
+	}
+	f.r.farms[plotI] = &Farm{Crop: "wheat", PlantedTick: -1 << 40, Owner: "someone", lastStage: -1} // long ripe
+	f.r.handleHarvest(f.p, map[string]any{"t": "harvest", "i": float64(plotI)})
+	if f.r.farms[plotI] == nil || f.p.Inv["grain"] != 0 {
+		t.Fatal("harvested a surface crop from a mine tunnel")
+	}
+	// ...and all three work from the surface
+	f.stand(x, y, 0)
+	f.r.handleHarvest(f.p, map[string]any{"t": "harvest", "i": float64(plotI)})
+	if f.r.farms[plotI] != nil {
+		t.Fatal("the surface keeper could not harvest the ripe plot")
+	}
+	f.r.handleBuild(f.p, map[string]any{"t": "build", "kind": "wall", "i": float64(wallI)})
+	if _, built := f.r.structures[wallI]; !built {
+		t.Fatal("the surface keeper could not build the wall")
+	}
+}
+
 func TestHarvestRefusedUntilRipe(t *testing.T) {
 	f := newFixture(t)
 	i := ti(float64(f.r.spawn[0]), float64(f.r.spawn[1]))

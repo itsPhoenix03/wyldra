@@ -3998,6 +3998,8 @@ class Hearth extends Phaser.Scene {
   }
 
   nearKind(kind: string, r = 4) {
+    // stations stand on the surface: in a mine or a shelter the craft menu must not offer them
+    if (this.z !== 0) return false;
     for (const [i, s] of this.structSpr)
       if (
         s.kind === kind &&

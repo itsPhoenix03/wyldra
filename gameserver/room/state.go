@@ -164,6 +164,12 @@ func (rm *Room) sheltered(p *Player, radius float64) bool {
 // nearStruct reports whether a structure of the given kind is within radius.
 // The legacy default radius is 4 (crafting stations).
 func (rm *Room) nearStruct(p *Player, kind string, radius float64) bool {
+	// Structures stand on the surface. Tile indices are shared across layers,
+	// so without this a keeper in a mine tunnel (or inside a shelter) under a
+	// workbench could craft at it through the floor.
+	if p.Z != 0 {
+		return false
+	}
 	for i, s := range rm.structures {
 		if s.Kind != kind {
 			continue

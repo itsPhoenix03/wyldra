@@ -259,10 +259,10 @@ the `init`/chunk work of Slice 1.
 | type | payload | notes |
 |---|---|---|
 | `gather` | `i, seq?, dx?, dy?` | 250 ms shared cooldown, range 2.5 |
-| `craft` | `r` | station must be within 4 tiles |
-| `build` | `i, kind, dir?` | range 6, dir is a facing 0–3 (else 0) |
+| `craft` | `r` | station must be within 4 tiles, and the player on the surface (`z=0`): stations stand there |
+| `build` | `i, kind, dir?` | `z=0` only, range 6, dir is a facing 0–3 (else 0) |
 | `dig` | `i, seq?, dx?, dy?` | `z=1` only, range 2, needs pick/spick |
-| `plant` / `harvest` | `i, crop?` | range 2.5, on a `farmplot` |
+| `plant` / `harvest` | `i, crop?` | `z=0` only, range 2.5, on a `farmplot` |
 | `furn` | `i, kind` | `z=1` (carved tile) — furniture lives in the mines only |
 | `torch` | — | `z=1`, on the player's own carved tile |
 | `eq` / `wear` | `k` (or `null`) | must own the tool / gear |
@@ -270,6 +270,11 @@ the `init`/chunk work of Slice 1.
 | `water` | — | 250 ms cooldown, adjacent water, cap 10 |
 | `chest_open` / `chest_move` | `i, res?, n?` | same layer, range 2.5 |
 | `atk` | `seq?, dx?, dy?` | 400 ms cooldown, `z=0` only |
+
+Tile indices are shared across the three layers, so every surface-only rule above checks the
+player's `z` as well as the distance — otherwise a keeper in a mine tunnel or a shelter right
+below a workbench, a farm plot or a free tile could craft, plant, harvest or build through the
+floor.
 
 `seq` is echoed on the resulting `act` and on the `node` / `dig` / `chit`
 outcome, and correlates a request to its outcome for reconciliation and dedup
