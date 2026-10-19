@@ -17,6 +17,7 @@ worldgen entirely; Section 6 requires the `worldVersion` guard to exist before y
 - `shared/world.js` (~lines 50–56): `elev` is a 320×320 Uint8Array, 0–3. Water = 0; land
   gets 1 + noise thresholds (`el > 0.05` → +1, `el > 0.42` → +1) + a ridged-noise pass
   (`ridge > 0.82`) that adds mountain chains. The Blight island is clamped to 1.
+- **v5 note:** `WORLD_VERSION` 5 replaced this rule. Each major island now has a coherent height field (Woods rolling hills with rock outcrops, Dunes crescent (barchan) dunes, pans and a few placed rocks, Spire coastal lowland, plateau and high massif, Marsh low hummocks; the Core stays flat level 1), quantised to levels 1-3 by the island's `t1` / `t2` in `ISLE_PLANS`, with each plaza (`CLEARINGS`) eased flat at a terrace level (`PLAZA_LVL`). Guarantees that now hold: no one-tile bumps or pits (`smoothLevels`); every land tile reachable from the shore with +1 climbing (`ensureClimbable` cuts a ramp where it is not); no small walled pockets (`unwallPockets`); no one-tile pillars or thin raised sea tongues (`trimSpikes`); no straight cliff run longer than 6 edges or run of more than 8 drawn 1-level ledges (`breakStraightCliffs`, `breakStraightLedges`); no lone 1-3-edge ledge dashes (`levelStubs`). `settleTerraces` repeats these until stable, then re-runs the climb check. The sizes, file references and line numbers in this guide describe the old 320 world; where they conflict, `shared/world.js` wins.
 - Gameplay already uses it: climbing >1 level is blocked (>2 while jumping,
   src/main.ts ~616), dropping ≥2 levels deals fall damage (server/index.js ~167).
 - Rendering already uses it: `isoE(x,y)` lifts everything by `(elev-1)*10` px
@@ -227,6 +228,8 @@ The data model already returns WATER out of bounds; teach the renderer to agree:
 Only enter this section after: (a) `worldVersion` check exists (advisory item 2), and
 (b) Sections 2–4 shipped — better rendering may make current terrain sufficient. Apply
 the placement bias from 4.5 to anything you add here.
+
+**v5 note:** knobs 1 and 2 below name the old rule, which no longer exists. In `WORLD_VERSION` 5 the level mix is set per island by its height field and its `t1` / `t2` thresholds in `ISLE_PLANS` (see "World Generator (v5)" in `MAP_EXPANSION_GUIDE.md`), and the version guard this section waits for now exists (`WORLD_VERSION`, with a same-seed migration: `10_GO_WIRE_PROTOCOL.md` section 8.5). The pit check below is only partly covered: the generator guarantees forward reachability (every land tile is reachable from the shore with +1 climbing) and cuts small walled pockets, but it does not check that every tile can climb back out, and `tools/worldmap` reports reachability from the coast and the spawn only.
 
 Goal: keep the 0–3 range but **invert the distribution** — today most land sits at 1
 with rare raised ridges; a carved world wants most land HIGH with valleys cut down.

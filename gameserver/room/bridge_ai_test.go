@@ -107,11 +107,17 @@ func TestBruteHoldsBoltForPlayerOnBridge(t *testing.T) {
 	f, cx, gy := channelFixture(t)
 	f.bridgeRow(cx, gy)
 	f.p.X, f.p.Y = float64(cx)+1.5, float64(gy)+0.5
-	hp := f.p.HP
 	c := f.spawnAt("brute", float64(cx)-3.5, float64(gy)+0.5, true)
+	f.reset()
 	f.r.bruteBolt(c, f.now)
-	if f.p.HP != hp {
-		t.Fatal("brute bolted a player standing on a bridge")
+	if f.lastOfType("caim") != nil || c.AtkState != atkReady {
+		t.Fatal("brute aimed a bolt at a player standing on a bridge")
+	}
+	// the same keeper off the span, in open water, is fair game
+	f.p.Y = float64(gy) + 3.5
+	f.r.bruteBolt(c, f.now)
+	if m := f.lastOfType("caim"); m == nil || m["kind"] != "bolt" {
+		t.Fatalf("brute did not aim at a keeper in open water: %v", m)
 	}
 }
 

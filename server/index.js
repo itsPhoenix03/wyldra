@@ -1,6 +1,6 @@
 ﻿// Wyldra — authoritative co-op survival server.
 import { WebSocketServer } from 'ws';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, copyFileSync, constants as fsConstants } from 'fs';
 import { genWorld, findSpawn, findMedicSpawns, medicBlockTiles, nearestLand, SIZE, T, MONOLITHS, CORE, DIGGABLE, WORLD_VERSION, ACTIVATION_I, ISLES, LANDMARK_BLOCK } from '../shared/world.js';
 import { NODE_DEF, RECIPES, STRUCT_HP, WOODEN, NAMES, canAfford, pay, emptyInv, DECOR_NONBLOCKING, CROPS, MAX_HP, MEDICINE_HEAL, MEDIC_TRADE_POOLS } from '../shared/defs.js';
 import { TICK_MS, DAY_LENGTH_SEC, isNightTime } from '../shared/time.js';
@@ -61,9 +61,26 @@ function loadSave() {
   if (!existsSync(SAVE_PATH)) return;
   try {
     const s = JSON.parse(readFileSync(SAVE_PATH, 'utf8'));
-    if (s.version !== WORLD_VERSION || s.seed !== SEED) return console.log('[hearth] save.json version/seed mismatch — starting fresh');
+    // A different seed is a different world, and a save from a newer build holds state this one cannot
+    // read: both start fresh. An OLDER version on the same seed is a map change, which keeps the players.
+    if (!Number.isInteger(s.version) || s.version < 1 || s.version > WORLD_VERSION || s.seed !== SEED)
+      return console.log('[hearth] save.json version/seed mismatch — starting fresh');
     day = s.day; time = s.time; won = s.won;
     s.mono.forEach((v, i) => (mono[i] = v));
+    if (s.version < WORLD_VERSION) {
+      // The terrain was reshaped, so every tile index in the save (nodes, structures, digs, farms, chests...)
+      // points at the wrong ground and none of it is loaded. Profiles survive minus their position (x/y -1 is
+      // outside the world, so the join code leaves that keeper at the normal spawn). Beds and campfires were
+      // structures, so respawn points reset with them. The next save writes WORLD_VERSION: this runs once, and
+      // before it can overwrite the old world the file is copied beside itself — once: a crash and rerun must not
+      // replace the pristine backup (COPYFILE_EXCL refuses to overwrite). A failed backup is logged, not fatal.
+      const bak = `${SAVE_PATH}.v${s.version}.bak`;
+      let backup;
+      try { copyFileSync(SAVE_PATH, bak, fsConstants.COPYFILE_EXCL); backup = `; old save backed up to ${bak}`; }
+      catch (e) { backup = e.code === 'EEXIST' ? `; old save already backed up at ${bak}` : `; BACKUP FAILED: ${e.message}`; }
+      for (const [tok, prof] of Object.entries(s.profiles || {})) if (prof) profiles[tok] = { ...prof, x: -1, y: -1 };
+      return console.log(`[hearth] world v${s.version} -> v${WORLD_VERSION}: map changed — kept ${Object.keys(profiles).length} player profiles, reset the world${backup}`);
+    }
     for (const [i, rem] of s.removed) removed.set(i, Date.now() + rem);
     s.mud.forEach((i) => mudTiles.add(i));
     Object.assign(sectorChops, s.sectorChops || {});
@@ -155,6 +172,7 @@ const nearAnyStruct = (p, r) => {
   return false;
 };
 const nearStruct = (p, kind, r = 4) => {
+  if (p.z !== 0) return false;   // structures stand on the surface: no crafting through a mine's ceiling
   for (const [i, s] of structures)
     if (s.kind === kind && Math.hypot((i % SIZE) - p.x, ((i / SIZE) | 0) - p.y) <= r) return true;
   return false;
@@ -238,7 +256,8 @@ wss.on('connection', (ws) => {
         prof.tools.forEach((t) => p.tools.add(t));
         prof.gear.forEach((g) => p.gear.add(g));
         p.hp = prof.hp; p.hunger = prof.hunger; p.thirst = prof.thirst;
-        if (world.tiles[ti(prof.x, prof.y)] !== T.WATER) { p.x = prof.x; p.y = prof.y; warped(p); }
+        // never restore into water or outside the world (a migrated save stores x/y -1: keep the spawn)
+        if (prof.x >= 0 && prof.y >= 0 && prof.x < SIZE && prof.y < SIZE && world.tiles[ti(prof.x, prof.y)] !== T.WATER) { p.x = prof.x; p.y = prof.y; warped(p); }
         p.wornGear = prof.wornGear && p.gear.has(prof.wornGear) ? prof.wornGear : null;
         if (prof.name && helloName === 'Keeper') p.name = prof.name;
       }
@@ -520,7 +539,7 @@ wss.on('connection', (ws) => {
       // zone enforcement: zone:'in' decor cannot be built outdoors (furn path handles them)
       if (r && r.zone === 'in') return;
       const x = i % SIZE, y = (i / SIZE) | 0;
-      if (Math.hypot(x - p.x, y - p.y) > 6) return;
+      if (p.z !== 0 || Math.hypot(x - p.x, y - p.y) > 6) return;   // built from the surface only
       const existing = structures.get(i);
       if (existing) {                 // stack: walls to 2 stories; nothing else stacks
         const maxLvl = kind === 'wall' ? 2 : 0;
@@ -579,7 +598,7 @@ wss.on('connection', (ws) => {
       if (!s || s.kind !== 'farmplot') return send(ws, { t: 'msg', s: 'No farm plot here.' });
       if (farms.has(i)) return send(ws, { t: 'msg', s: 'Something is already growing here.' });
       const x = i % SIZE, y = (i / SIZE) | 0;
-      if (Math.hypot(x - p.x, y - p.y) > 2.5) return;
+      if (p.z !== 0 || Math.hypot(x - p.x, y - p.y) > 2.5) return;   // farm plots are on the surface
       if (!canAfford(p.inv, cropDef.seedCost)) return send(ws, { t: 'msg', s: 'Not enough seeds.' });
       pay(p.inv, cropDef.seedCost);
       farms.set(i, { crop: cropName, plantedTick: tickN, owner: id });
@@ -597,7 +616,7 @@ wss.on('connection', (ws) => {
       const stage = Math.min(2, Math.floor(3 * (tickN - fm.plantedTick) / growTicks));
       if (stage < 2) return send(ws, { t: 'msg', s: `Not ready yet (${Math.floor(100 * (tickN - fm.plantedTick) / growTicks)}%).` });
       const x = i % SIZE, y = (i / SIZE) | 0;
-      if (Math.hypot(x - p.x, y - p.y) > 2.5) return;
+      if (p.z !== 0 || Math.hypot(x - p.x, y - p.y) > 2.5) return;   // farm plots are on the surface
       for (const [res, amt] of Object.entries(cropDef.yield)) p.inv[res] = (p.inv[res] || 0) + amt;
       farms.delete(i);
       bcast({ t: 'crop', i, crop: null, stage: 0 });
@@ -726,9 +745,11 @@ wss.on('connection', (ws) => {
       const atkClip = p.equip === 'axe' ? 'chop' : (p.equip === 'pick' || p.equip === 'spick') ? 'mine' : (p.equip === 'sword' || p.equip === 'isword') ? 'slash' : 'punch';
       bcast({ t: 'act', id, seq, a: atkClip, tool: p.equip, dx: clampDir(m.dx), dy: clampDir(m.dy), targetI: bid });
       if (!best) {
-        // no creature in range: strike a structure to demolish it (half materials refunded)
+        // no creature in range: strike a structure to demolish it (half materials refunded).
+        // Never the World Engine: only the Blight may bring it down.
         let bsi = -1, bsd = 2.4;
         for (const [si, s] of structures) {
+          if (s.kind === 'engine') continue;
           const d = Math.hypot((si % SIZE) - p.x, ((si / SIZE) | 0) - p.y);
           if (d < bsd) { bsd = d; bsi = si; }
         }
@@ -746,7 +767,6 @@ wss.on('connection', (ws) => {
           bcast({ t: 'sd', i: bsi, hp: 0 });
           sendInv(id, p);
           send(ws, { t: 'msg', s: `Demolished ${s.kind}${back.length ? ' — recovered ' + back.join(', ') : ''}` });
-          if (wave && bsi === wave.engineI) { wave = null; bcast({ t: 'wave', secs: 0 }); bcast({ t: 'msg', s: 'You destroyed your own World Engine!' }); }
         } else bcast({ t: 'sd', i: bsi, hp: s.hp });
         return;
       }
@@ -945,8 +965,12 @@ setInterval(() => {
   // node respawns
   if (tickN % 25 === 0) {
     const now = Date.now();
-    for (const [i, at] of removed)
-      if (now > at) { removed.delete(i); bcast({ t: 'node', i, hp: -1 }); }
+    for (const [i, at] of removed) {
+      if (now <= at) continue;
+      // nothing regrows through what has been built on its tile: check again in a minute
+      if (structures.has(i) || farms.has(i) || medicTiles.has(i)) { removed.set(i, now + 60000); continue; }
+      removed.delete(i); bcast({ t: 'node', i, hp: -1 });
+    }
   }
 
   // weather events: rain (Woods/Marsh), sandstorm (Dunes), snowstorm (Spire)
@@ -1348,7 +1372,8 @@ setInterval(() => {
 
     const s = structures.get(ni);
     // creatures skip non-blocking decor (not fence — fence is blocking so it won't appear here)
-    if (s && DECOR_NONBLOCKING.has(s.kind)) { c.x = nx; c.y = ny; }
+    // farm plots are walked over too: a hunter crossing a field must not chew the plot and its crop
+    if (s && (DECOR_NONBLOCKING.has(s.kind) || s.kind === 'farmplot')) { c.x = nx; c.y = ny; }
     else if (s && distT > 1.2 && c.type !== 'bog_shambler') {  // bog_shambler ignores structures
       if (tickN % 5 === 0) {
         s.hp -= (c.type === 'brute') ? 3 : 1;

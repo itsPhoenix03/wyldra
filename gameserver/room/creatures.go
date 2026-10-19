@@ -67,11 +67,19 @@ type Creature struct {
 	Stun       int
 	Enraged    int
 	OrbitTicks int
-	ShotCd     int
 
-	// brute / bog_shambler telegraph
-	Windup          int
-	WindupTriggered bool
+	// Level 1..5 and the abilities it unlocks (creature_levels.go).
+	Level int
+	Abil  creAbility
+
+	// Per-layer state, each struct owned by its own file: the base brain
+	// (creature_base.go), the attack machine incl. the heavies' telegraph and
+	// ranged cooldowns (creature_attack.go), and the level features
+	// (creature_elite.go). Fields are promoted, so c.AtkState etc. read as
+	// plain fields.
+	creBase
+	creAtk
+	creElite
 
 	// wisp / frost_wraith drift and flee
 	TW      float64
@@ -325,7 +333,7 @@ func (r *Room) creatureSpawnTick(strength int) {
 					continue
 				}
 				ct := creTypes["husk_wolf"]
-				r.newCreature(px2, py2, ct.hpBase+ct.hpStr*strength, "husk_wolf", ti(px2, py2), true)
+				r.spawnLeveled(px2, py2, ct.hpBase+ct.hpStr*strength, "husk_wolf", ti(px2, py2), strength)
 			}
 			placed = true
 			ok = false // already spawned above
@@ -406,7 +414,7 @@ func (r *Room) creatureSpawnTick(strength int) {
 		return
 	}
 	ct := creTypes[typ]
-	r.newCreature(sx, sy, ct.hpBase+ct.hpStr*strength, typ, ti(sx, sy), true)
+	r.spawnLeveled(sx, sy, ct.hpBase+ct.hpStr*strength, typ, ti(sx, sy), strength)
 }
 
 func (r *Room) newCreature(x, y float64, hp int, typ string, homeI int, hasHome bool) *Creature {
@@ -418,7 +426,15 @@ func (r *Room) newCreature(x, y float64, hp int, typ string, homeI int, hasHome 
 	if r.nextCre%2 == 1 { // alternate strafe sides without touching the RNG stream
 		c.Orbit = -1
 	}
+	c.setLevel(1) // natural spawns roll a level afterwards (spawnLeveled)
 	r.addCreature(c)
+	return c
+}
+
+// spawnLeveled is newCreature for a natural spawn: it rolls the level.
+func (r *Room) spawnLeveled(x, y float64, hp int, typ string, homeI int, strength int) *Creature {
+	c := r.newCreature(x, y, hp, typ, homeI, true)
+	r.levelUp(c, r.rollLevel(typ, strength))
 	return c
 }
 
@@ -440,6 +456,7 @@ func (r *Room) creatureTick(strength int, nowMs int64) {
 	}
 
 	r.sampleVelocities()
+	r.assignSlots()
 	for _, c := range append([]*Creature(nil), r.creOrder...) {
 		if _, alive := r.creatures[c.ID]; !alive {
 			continue // died or despawned earlier in this same pass
@@ -458,6 +475,11 @@ func (r *Room) stepCreature(c *Creature, strength int, nowMs int64) {
 	ct := creTypes[typ]
 	baseSp, cdmg := ct.speed, ct.dmg
 
+	// per-layer timers run every tick, stunned or not
+	r.baseTimers(c)
+	r.attackTimers(c)
+	r.eliteTick(c, typ)
+
 	// stun check
 	if c.Stun > 0 {
 		c.Stun--
@@ -469,6 +491,11 @@ func (r *Room) stepCreature(c *Creature, strength int, nowMs int64) {
 	enrageBonus, enrageRange := 0.0, 0.0
 	if c.Enraged > 0 {
 		enrageBonus, enrageRange = 0.2, 6 // +20% speed, +6 chase range
+	}
+
+	// an attack under way (windup, strike, recovery, aiming) owns the tick
+	if r.attackBusy(c, typ, cdmg, nowMs) {
+		return
 	}
 
 	var tx, ty float64
@@ -543,32 +570,8 @@ func (r *Room) stepCreature(c *Creature, strength int, nowMs int64) {
 	}
 
 	// --- brute / bog_shambler telegraph windup ---
-	if typ == "brute" || typ == "bog_shambler" {
-		if c.Windup > 0 {
-			c.Windup--
-			return // frozen during windup
-		}
-		if !c.WindupTriggered {
-			for _, q := range r.playerOrder {
-				if q.Z == 0 && math.Hypot(q.X-c.X, q.Y-c.Y) < 2.5 {
-					c.Windup, c.WindupTriggered = 8, true
-					r.broadcast(map[string]any{"t": "ctel", "id": c.ID})
-					break
-				}
-			}
-		} else {
-			// reset the trigger once the player has left range
-			anyNear := false
-			for _, q := range r.playerOrder {
-				if q.Z == 0 && math.Hypot(q.X-c.X, q.Y-c.Y) < 2.5 {
-					anyNear = true
-					break
-				}
-			}
-			if !anyNear {
-				c.WindupTriggered = false
-			}
-		}
+	if r.heavyWindup(c, typ) {
+		return // frozen during windup
 	}
 
 	// --- stranded: a bridge went out from under it ---
@@ -613,9 +616,17 @@ func (r *Room) stepCreature(c *Creature, strength int, nowMs int64) {
 		}
 	}
 
+	// a level feature under way (a charge, a panicked flight) owns the tick
+	if r.eliteOverride(c, typ, baseSp, nowMs) {
+		return
+	}
+
 	// --- target selection ---
 	var prey *Player // the player being hunted, when the target is one
 	mode := aiHunt
+	if r.wave != nil || typ == "brute" {
+		c.AggroID = "" // the Engine or a structure; choosePrey sets it for a keeper
+	}
 	if r.wave != nil {
 		tx = float64(r.wave.engineI % world.SIZE)
 		ty = float64(r.wave.engineI / world.SIZE)
@@ -659,39 +670,21 @@ func (r *Room) stepCreature(c *Creature, strength int, nowMs int64) {
 				}
 			}
 			if !haveTarget {
-				for _, q := range r.playerOrder {
-					if d := math.Hypot(q.X-c.X, q.Y-c.Y); d < bd {
-						bd = d
-						tx, ty = q.X, q.Y
-						haveTarget, prey = true, q
-					}
-				}
-			}
-		} else {
-			// bog_shambler: targets players only
-			bd := 45.0
-			for _, q := range r.surfacePlayers() {
-				if d := math.Hypot(q.X-c.X, q.Y-c.Y); d < bd {
-					bd = d
+				if q, _ := r.choosePrey(c, typ, bd, bd); q != nil {
 					tx, ty = q.X, q.Y
 					haveTarget, prey = true, q
 				}
 			}
+		} else {
+			// bog_shambler: targets players only
+			if q, _ := r.choosePrey(c, typ, 45, 45); q != nil {
+				tx, ty = q.X, q.Y
+				haveTarget, prey = true, q
+			}
 		}
 	} else if typ == "stalker" {
 		// flanking: orbit within 8 tiles, then dart
-		var nearP *Player
-		nearD := 26 + enrageRange
-		for _, q := range r.surfacePlayers() {
-			rad := 26 + enrageRange
-			if q.Inv["essence"] > 0 || q.Inv["meat"] > 0 {
-				rad = 40 + enrageRange
-			}
-			d := math.Hypot(q.X-c.X, q.Y-c.Y)
-			if d < math.Min(nearD, rad) {
-				nearD, nearP = d, q
-			}
-		}
+		nearP, nearD := r.choosePrey(c, typ, 26+enrageRange, 40+enrageRange)
 		if nearP != nil {
 			haveTarget, prey = true, nearP
 			if nearD <= 8 {
@@ -712,19 +705,9 @@ func (r *Room) stepCreature(c *Creature, strength int, nowMs int64) {
 		}
 	} else {
 		// crawler / husk_wolf / drowned / blight_lancer: straight chase
-		baseRange := 26 + enrageRange
-		bd := baseRange
-		for _, q := range r.surfacePlayers() {
-			rad := baseRange
-			if q.Inv["essence"] > 0 || q.Inv["meat"] > 0 {
-				rad = 40 + enrageRange
-			}
-			d := math.Hypot(q.X-c.X, q.Y-c.Y)
-			if d < math.Min(bd, rad) {
-				bd = d
-				tx, ty = q.X, q.Y
-				haveTarget, prey = true, q
-			}
+		if q, _ := r.choosePrey(c, typ, 26+enrageRange, 40+enrageRange); q != nil {
+			tx, ty = q.X, q.Y
+			haveTarget, prey = true, q
 		}
 		// husk_wolf pack-link: inherit a pack-mate's enrage within 12 tiles
 		if typ == "husk_wolf" && !haveTarget {
@@ -761,10 +744,15 @@ func (r *Room) stepCreature(c *Creature, strength int, nowMs int64) {
 	case aiWander:
 		spMult = 0.4
 	}
+	spMult *= r.eliteSpeed(c, typ)
 	rawSp := (baseSp*(1+enrageBonus) + float64(strength)*0.03) * spMult
 	if prey != nil {
 		r.creatureSawPrey(c, prey)
 		tx, ty = r.creatureTactics(c, typ, prey, tx, ty, rawSp)
+		var m float64
+		tx, ty, m = r.baseTactics(c, typ, prey, tx, ty)
+		rawSp *= m
+		tx, ty = r.eliteTactics(c, typ, prey, tx, ty)
 	}
 
 	distT := math.Hypot(tx-c.X, ty-c.Y)
@@ -789,26 +777,13 @@ func (r *Room) stepCreature(c *Creature, strength int, nowMs int64) {
 		aimX, aimY = wx, wy
 	}
 	moveAng := math.Atan2(aimY-c.Y, aimX-c.X)
+	sp = r.rampSpeed(c, sp, moveAng, mode)
 
-	// water/obstacle steering: try +/-35 degrees if blocked. medicTiles blocks
-	// creature steering — the medic-hut fix.
-	nx := c.X + math.Cos(moveAng)*sp
-	ny := c.Y + math.Sin(moveAng)*sp
-	ni := ti(nx, ny)
-	if blocked(ni, nx, ny) {
-		moved := false
-		for _, rot := range [2]float64{35 * math.Pi / 180, -35 * math.Pi / 180} {
-			tryAng := moveAng + rot
-			tnx := c.X + math.Cos(tryAng)*sp
-			tny := c.Y + math.Sin(tryAng)*sp
-			tni := ti(tnx, tny)
-			if !blocked(tni, tnx, tny) {
-				nx, ny, ni = tnx, tny, tni
-				moved = true
-				break
-			}
-		}
-		if !moved && mode != aiWander {
+	// water/obstacle steering (creature_base.go). medicTiles blocks creature
+	// steering — the medic-hut fix.
+	nx, ny, ni, moved := r.steer(c, moveAng, sp, blocked)
+	if !moved {
+		if mode != aiWander {
 			// boxed in on the straight line: look for a way round before
 			// falling back to gnawing through
 			wx, wy, ok := r.planPath(c, gx, gy, swims, fear)
@@ -854,8 +829,10 @@ func (r *Room) stepCreature(c *Creature, strength int, nowMs int64) {
 
 	s := r.structures[ni]
 	switch {
-	case s != nil && r.defs.DecorNonBlk[s.Kind]:
-		// creatures walk over non-blocking decor
+	case s != nil && !r.creBlocked(ni):
+		// creatures walk over non-blocking decor and farm plots. Steering lets
+		// them step there, so only a blocking structure may be gnawed: a hunter
+		// crossing a field used to chew the plot (and its crop) to nothing.
 		c.X, c.Y = nx, ny
 	case s != nil && distT > 1.2 && typ != "bog_shambler" && mode == aiHunt:
 		// bog_shambler ignores structures; only a hunt gnaws through
@@ -888,6 +865,7 @@ func (r *Room) stepCreature(c *Creature, strength int, nowMs int64) {
 		}
 		c.X, c.Y = nx, ny
 	}
+	r.trackProgress(c, gx, gy, mode)
 
 	if typ == "blight_lancer" && r.tickN%5 == 0 {
 		r.lancerBeam(c, nowMs)
@@ -896,155 +874,27 @@ func (r *Room) stepCreature(c *Creature, strength int, nowMs int64) {
 		r.bruteBolt(c, nowMs)
 	}
 
-	// contact damage: brute/bog_shambler only land it once the windup is spent
-	if r.tickN%5 == 0 && cdmg != 0 {
-		bruteReady := (typ != "brute" && typ != "bog_shambler") || !c.WindupTriggered || c.Windup == 0
-		if bruteReady {
-			for _, q := range r.playerOrder {
-				if q.Z != 0 || math.Hypot(q.X-c.X, q.Y-c.Y) >= 1.1 {
-					continue
-				}
-				if (typ == "brute" || typ == "bog_shambler") && c.WindupTriggered && c.Windup > 0 {
-					continue
-				}
-				r.hitPlayer(q, c, cdmg, nowMs, false)
-				struckRetreat(c, typ)
-			}
-		}
-	}
+	// melee: start (or land) an attack on a keeper in reach
+	r.meleeTrigger(c, typ, prey, cdmg, nowMs)
 }
 
-// creatureContact is the wisp/frost_wraith contact-damage block. sendSlow
-// mirrors the legacy dart branch, which sends `slow` unconditionally; the drift
-// branch only sends it for a frost_wraith.
-func (r *Room) creatureContact(c *Creature, cdmg int, sendSlow bool, nowMs int64) {
-	if r.tickN%5 != 0 || cdmg == 0 {
-		return
-	}
-	for _, q := range r.playerOrder {
-		if q.Z != 0 || math.Hypot(q.X-c.X, q.Y-c.Y) >= 1.1 {
-			continue
-		}
-		r.hitPlayer(q, c, cdmg, nowMs, sendSlow || c.Type == "frost_wraith")
-	}
-}
-
-// hitPlayer applies creature contact damage with the knockback angle, respawns
-// on death, and optionally sends the frost-wraith slow.
-func (r *Room) hitPlayer(q *Player, c *Creature, dmg int, nowMs int64, slow bool) {
-	q.LastDamageAt = nowMs
-	taken := r.creatureDamage(q, dmg)
-	q.HP -= taken
-	cAng := math.Atan2(q.Y-c.Y, q.X-c.X) // away from the creature = push direction
-	if q.HP <= 0 {
-		r.respawn(q, false)
-	}
-	out := map[string]any{"t": "hp", "hp": q.HP, "x": q.X, "y": q.Y, "ang": cAng}
-	if taken < dmg {
-		out["blocked"] = dmg - taken // the armor turned some or all of it
-	}
-	r.send(q, out)
-	if slow {
-		r.send(q, map[string]any{"t": "slow", "ticks": 30})
-	}
-}
-
-// lancerBeam is the blight lancer's siege shot: the first blocking structure on
-// the line eats the beam and is annihilated (the Engine only takes 20).
-func (r *Room) lancerBeam(c *Creature, nowMs int64) {
-	if c.ShotCd > 0 {
-		c.ShotCd--
-	}
-	if c.ShotCd != 0 {
-		return
-	}
-	for _, q := range r.playerOrder {
-		d := math.Hypot(q.X-c.X, q.Y-c.Y)
-		if q.Z != 0 || d < 1.5 || d > 9 {
-			continue
-		}
-		c.ShotCd = 4 // ~4s between beams
-		// walk the line: the first blocking structure eats the beam
-		hitI := -1
-		steps := int(math.Ceil(d * 2))
-		for st := 1; st <= steps; st++ {
-			li := ti(c.X+((q.X-c.X)*float64(st))/float64(steps),
-				c.Y+((q.Y-c.Y)*float64(st))/float64(steps))
-			ls, ok := r.structures[li]
-			if ok && !r.defs.DecorNonBlk[ls.Kind] && ls.Kind != "farmplot" {
-				hitI = li
-				break
-			}
-		}
-		bx, by := q.X, q.Y
-		if hitI >= 0 {
-			bx, by = float64(hitI%world.SIZE), float64(hitI/world.SIZE)
-		}
-		r.broadcast(map[string]any{
-			"t": "shot", "kind": "lance",
-			"fx": toFixed(c.X, 1), "fy": toFixed(c.Y, 1),
-			"tx": toFixed(bx, 1), "ty": toFixed(by, 1),
-		})
-		if hitI >= 0 {
-			ls := r.structures[hitI]
-			if ls.Kind == "engine" { // never one-shot the finale objective
-				ls.HP -= 20
-				if ls.HP <= 0 {
-					r.destroyStructure(hitI)
-					r.broadcast(map[string]any{"t": "sd", "i": hitI, "hp": 0})
-					if r.wave != nil && hitI == r.wave.engineI {
-						r.wave = nil
-						r.broadcast(map[string]any{"t": "wave", "secs": 0})
-						r.broadcast(map[string]any{"t": "msg", "s": "THE WORLD ENGINE WAS DESTROYED! Rebuild it to try again."})
-					}
-				} else {
-					r.broadcast(map[string]any{"t": "sd", "i": hitI, "hp": ls.HP})
-				}
-			} else {
-				r.destroyStructure(hitI)
-				r.broadcast(map[string]any{"t": "sd", "i": hitI, "hp": 0})
-				r.broadcast(map[string]any{"t": "msg", "s": "⚡ A Blight Lancer's beam vaporised a structure!"})
-			}
-		} else {
-			q.LastDamageAt = nowMs
-			q.HP -= r.creatureDamage(q, 2)
-			lAng := math.Atan2(q.Y-c.Y, q.X-c.X)
-			if q.HP <= 0 {
-				r.respawn(q, false)
-			}
-			r.send(q, map[string]any{"t": "hp", "hp": q.HP, "x": q.X, "y": q.Y, "ang": lAng})
-		}
-		break
-	}
-}
-
-// bruteBolt is the brute's ranged answer to players hiding in water it cannot
-// enter.
-func (r *Room) bruteBolt(c *Creature, nowMs int64) {
-	if c.ShotCd > 0 {
-		c.ShotCd--
-	}
-	if c.ShotCd != 0 {
-		return
-	}
-	for _, q := range r.playerOrder {
-		d := math.Hypot(q.X-c.X, q.Y-c.Y)
-		// a player on a bridge is within reach on foot: no bolt
-		if q.Z == 0 && d > 1.5 && d < 7 && !r.creFooting(ti(q.X, q.Y)) {
-			c.ShotCd = 3 // one bolt every ~3s
-			q.LastDamageAt = nowMs
-			q.HP -= r.creatureDamage(q, 1)
-			cAng := math.Atan2(q.Y-c.Y, q.X-c.X)
-			r.broadcast(map[string]any{
-				"t":  "shot",
-				"fx": toFixed(c.X, 1), "fy": toFixed(c.Y, 1),
-				"tx": toFixed(q.X, 1), "ty": toFixed(q.Y, 1),
-			})
-			if q.HP <= 0 {
-				r.respawn(q, false)
-			}
-			r.send(q, map[string]any{"t": "hp", "hp": q.HP, "x": q.X, "y": q.Y, "ang": cAng})
-			break
+// choosePrey is the base brain's pick (selectPrey) bent by the level features
+// (elitePrey: an alpha's pack hunts the alpha's prey), with the distance to
+// whoever was chosen.
+//
+// It leaves c.AggroID naming the final pick ("" for none), so selectPrey sees
+// last tick's prey there and the slot pass (assignSlots) sees this tick's.
+func (r *Room) choosePrey(c *Creature, typ string, sight, scent float64) (*Player, float64) {
+	q, d := r.selectPrey(c, typ, sight, scent)
+	if e := r.elitePrey(c, typ, q); e != q {
+		q = e
+		if q != nil {
+			d = math.Hypot(q.X-c.X, q.Y-c.Y)
 		}
 	}
+	c.AggroID = ""
+	if q != nil {
+		c.AggroID = q.S.ID
+	}
+	return q, d
 }

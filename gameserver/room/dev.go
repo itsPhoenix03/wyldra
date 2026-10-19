@@ -194,35 +194,62 @@ func (r *Room) handleDevCmd(p *Player, m map[string]any) {
 			return
 		}
 		// place it a few tiles away on terrain it can actually occupy
-		wantWater := typ == "drowned"
-		sx, sy, found := p.X, p.Y, false
-		for att := 0; att < 40 && !found; att++ {
-			a2 := rand.Float64() * math.Pi * 2
-			r2 := 4 + rand.Float64()*4
-			cx2 := math.Round(p.X + math.Cos(a2)*r2)
-			cy2 := math.Round(p.Y + math.Sin(a2)*r2)
-			if cx2 <= 0 || cy2 <= 0 || cx2 >= world.SIZE || cy2 >= world.SIZE {
-				continue
-			}
-			if wantWater == (r.world.Tiles[ti(cx2, cy2)] == world.TWater) {
-				sx, sy, found = cx2, cy2, true
-			}
-		}
+		sx, sy, found := r.devSpot(p.X, p.Y, typ == "drowned", 4, 8)
 		hp := ct.hpBase + ct.hpStr*r.strength()
 		// no home tile -> no leash, so the test subject always commits to the
 		// chase instead of wandering back
-		r.newCreature(sx, sy, hp, typ, 0, false)
+		c := r.newCreature(sx, sy, hp, typ, 0, false)
+		// level 1 unless the tester asks for one (2-5, docs/10 §13.6)
+		if lv := getNum(m, "lvl"); !math.IsNaN(lv) && lv >= 2 {
+			r.levelUp(c, int(lv))
+		}
 		tail := ""
 		if !found {
 			tail = " — no valid tile, placed on you"
 		}
-		r.send(p, map[string]any{"t": "msg", "s": fmt.Sprintf("\U0001F9EA Spawned %s (%d hp)%s", typ, hp, tail)})
+		r.send(p, map[string]any{"t": "msg", "s": fmt.Sprintf("\U0001F9EA Spawned %s Lv%d (%d hp)%s", typ, c.Level, c.HP, tail)})
 
 	case "clearcre":
 		n := len(r.creatures)
 		r.creatures = map[string]*Creature{}
 		r.creOrder = nil
 		r.send(p, map[string]any{"t": "msg", "s": fmt.Sprintf("\U0001F9F9 Cleared %d monsters", n)})
+
+	case "aitest":
+		// an enemy-AI set piece: clear the arena, then drop the squad together
+		// 7-9 tiles away so it comes at the tester as a group (docs/10 §13.6)
+		sc, known := devAIScenarios[getString(m, "kind")]
+		if !known {
+			return
+		}
+		r.creatures, r.creOrder = map[string]*Creature{}, nil
+		ax, ay, _ := r.devSpot(p.X, p.Y, false, 7, 9)
+		for _, sq := range sc.squad {
+			x, y, ok := r.devSpot(ax, ay, false, 1, 2.5)
+			if !ok {
+				x, y, _ = r.devSpot(p.X, p.Y, false, 4, 8)
+			}
+			ct := creTypes[sq.typ]
+			c := r.newCreature(x, y, ct.hpBase+ct.hpStr*r.strength(), sq.typ, 0, false)
+			if sq.lvl >= 2 {
+				r.levelUp(c, sq.lvl)
+			}
+		}
+		r.send(p, map[string]any{"t": "msg", "s": "\U0001F9EA AI test — " + sc.name + ": " + sc.hint})
+
+	case "monoreset":
+		// every monolith back to dormant, as in a new world. Strength (and so
+		// spawn gates and enemy levels) drops with it; the Engine, a running
+		// wave and a won world are left as they are.
+		n := 0
+		for _, lit := range r.mono {
+			if lit {
+				n++
+			}
+		}
+		r.mono = [4]bool{}
+		r.broadcast(map[string]any{"t": "monoreset"})
+		r.send(p, map[string]any{"t": "msg", "s": fmt.Sprintf("\U0001F5FF Monoliths reset — all four dormant (%d were lit)", n)})
 
 	case "kill":
 		p.God = false
@@ -234,6 +261,56 @@ func (r *Room) handleDevCmd(p *Player, m map[string]any) {
 		r.send(p, map[string]any{"t": "msg", "s": "\U0001F480 Killed — respawned."})
 		r.pushChunks(p) // see the note under `tp`
 	}
+}
+
+// devSpot finds a tile rmin..rmax tiles from (x, y) that a creature can stand
+// on: open water for one that wants it, otherwise land a creature may step onto
+// (no structure, wall or medic hut). found=false leaves it at (x, y).
+func (r *Room) devSpot(x, y float64, wantWater bool, rmin, rmax float64) (float64, float64, bool) {
+	for att := 0; att < 40; att++ {
+		a := rand.Float64() * math.Pi * 2
+		rr := rmin + rand.Float64()*(rmax-rmin)
+		cx := math.Round(x + math.Cos(a)*rr)
+		cy := math.Round(y + math.Sin(a)*rr)
+		if cx <= 0 || cy <= 0 || cx >= world.SIZE || cy >= world.SIZE {
+			continue
+		}
+		i := ti(cx, cy)
+		if wantWater == (r.world.Tiles[i] == world.TWater) && (wantWater || !r.creStepBlocked(i, false)) {
+			return cx, cy, true
+		}
+	}
+	return x, y, false
+}
+
+// devSquad is one member of an AI test squad: a type at a level.
+type devSquad struct {
+	typ string
+	lvl int
+}
+
+// devAIScenarios are the tester panel's enemy-AI set pieces, keyed by the
+// `aitest` kind. Each shows off one slice of the brain (docs/10 §13.6); the
+// hint is the toast telling the tester what to watch for.
+var devAIScenarios = map[string]struct {
+	name, hint string
+	squad      []devSquad
+}{
+	"swarm": {"Swarm", "six Lv1 crawlers. Three close in at once while the rest circle; " +
+		"every lunge is telegraphed, so step aside.",
+		[]devSquad{{"crawler", 1}, {"crawler", 1}, {"crawler", 1}, {"crawler", 1}, {"crawler", 1}, {"crawler", 1}}},
+	"pack": {"Wolf pack", "a crowned Lv5 alpha and three wolves. They flank and follow the alpha's lead; " +
+		"strike the alpha to enrage them, kill it to make them panic.",
+		[]devSquad{{"husk_wolf", 5}, {"husk_wolf", 3}, {"husk_wolf", 2}, {"husk_wolf", 2}}},
+	"duel": {"Duelists", "two Lv3 crawlers that dodge and hit and run, and a Lv4 stalker that charges. " +
+		"Swing while they wind up; bait the charge into a wall.",
+		[]devSquad{{"crawler", 3}, {"crawler", 3}, {"stalker", 4}}},
+	"siege": {"Siege", "a Lv4 brute and a Lv4 blight lancer. Shots are aimed first and lead you; " +
+		"step off the aim line. The brute charges.",
+		[]devSquad{{"brute", 4}, {"blight_lancer", 4}}},
+	"warlord": {"Warlord", "a Lv5 brute leading four Lv2 crawlers. They hunt whoever it hunts; " +
+		"kill the warlord and they scatter.",
+		[]devSquad{{"brute", 5}, {"crawler", 2}, {"crawler", 2}, {"crawler", 2}, {"crawler", 2}}},
 }
 
 // godTick is the legacy dev god mode: heal any protected player back to full

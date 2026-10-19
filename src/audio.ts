@@ -114,6 +114,55 @@ export class GameAudio {
     this.tone('sawtooth', 90 + Math.random() * 25, 68, 0.9, 0.12, 250);
   }
 
+  // Enemy telegraph cues: kept quiet and rate-limited, since a whole pack can wind up in one tick.
+  private lastCue: Record<string, number> = {};
+  private cue(k: string, gapMs: number) {
+    const n = performance.now();
+    if (n - (this.lastCue[k] ?? 0) < gapMs) return false;
+    this.lastCue[k] = n;
+    return true;
+  }
+  lunge() {                                             // a quick swish as a windup releases
+    if (!this.cue('lunge', 80)) return;
+    this.burst(0.1, 2600, 0.05, 'bandpass');
+    this.tone('sawtooth', 240, 110, 0.12, 0.035, 900);
+  }
+  aim(secs = 0.6) {                                     // rising charge-up hum while a shot is aimed
+    if (!this.cue('aim', 200)) return;
+    this.swell('triangle', 220, 820, secs, 0.045, 2600);
+  }
+  whiff() {                                             // a swing cut through air: the target sidestepped
+    if (!this.cue('whiff', 80)) return;
+    this.burst(0.15, 1700, 0.05, 'bandpass');
+    this.tone('sine', 560, 300, 0.1, 0.025, 1500);
+  }
+  charge() {                                            // low growl climbing as the dash winds up
+    if (!this.cue('charge', 200)) return;
+    this.swell('sawtooth', 55, 150, 0.8, 0.07, 380);
+    this.burst(0.5, 300, 0.04);
+  }
+  rally() {                                             // an alpha's pitched roar
+    if (!this.cue('rally', 300)) return;
+    this.tone('sawtooth', 150, 70, 0.8, 0.08, 520);
+    this.tone('square', 75, 52, 0.8, 0.035, 260);
+  }
+
+  // like tone() but the envelope swells toward the end instead of decaying
+  private swell(type: OscillatorType, f0: number, f1: number, dur: number, vol: number, filterF: number) {
+    if (!this.started || this.muted) return;
+    const t = this.ctx.currentTime;
+    const o = this.ctx.createOscillator(); o.type = type;
+    o.frequency.setValueAtTime(f0, t);
+    o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
+    const f = this.ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = filterF;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + dur * 0.9);
+    g.gain.linearRampToValueAtTime(0.0001, t + dur + 0.04);
+    o.connect(f); f.connect(g); g.connect(this.master);
+    o.start(t); o.stop(t + dur + 0.08);
+  }
+
   private tone(type: OscillatorType, f0: number, f1: number, dur: number, vol: number, filterF: number) {
     if (!this.started || this.muted) return;
     const t = this.ctx.currentTime;

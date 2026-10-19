@@ -137,7 +137,7 @@ covers well beyond the viewport at any supported zoom.
   "waterTemp": "<base64 RLE>",   // 0 temperate, 1 freezing, 2 hot
   "tileVis":   "<base64 RLE>",   // 0/1 decorative variant flag
   "nodes": [[localIdx, kind], ...],     // resource nodes currently present
-  "decor": [[localIdx, "key"], ...],    // static decor prop keys
+  "decor": [[localIdx, "key"], ...],    // static decor prop keys (the client hides one under anything built on its tile)
   "bergs": [localIdx, ...],             // iceberg water tiles
   "digs":  [localIdx, ...],             // carved mine tiles (z=1) in this chunk
   "structs": [[localIdx, "kind", hp, dir, lvl], ...]  // player structures
@@ -259,10 +259,10 @@ the `init`/chunk work of Slice 1.
 | type | payload | notes |
 |---|---|---|
 | `gather` | `i, seq?, dx?, dy?` | 250 ms shared cooldown, range 2.5 |
-| `craft` | `r` | station must be within 4 tiles |
-| `build` | `i, kind, dir?` | range 6, dir is a facing 0–3 (else 0) |
+| `craft` | `r` | station must be within 4 tiles, and the player on the surface (`z=0`): stations stand there |
+| `build` | `i, kind, dir?` | `z=0` only, range 6, dir is a facing 0–3 (else 0) |
 | `dig` | `i, seq?, dx?, dy?` | `z=1` only, range 2, needs pick/spick |
-| `plant` / `harvest` | `i, crop?` | range 2.5, on a `farmplot` |
+| `plant` / `harvest` | `i, crop?` | `z=0` only, range 2.5, on a `farmplot` |
 | `furn` | `i, kind` | `z=1` (carved tile) — furniture lives in the mines only |
 | `torch` | — | `z=1`, on the player's own carved tile |
 | `eq` / `wear` | `k` (or `null`) | must own the tool / gear |
@@ -270,6 +270,11 @@ the `init`/chunk work of Slice 1.
 | `water` | — | 250 ms cooldown, adjacent water, cap 10 |
 | `chest_open` / `chest_move` | `i, res?, n?` | same layer, range 2.5 |
 | `atk` | `seq?, dx?, dy?` | 400 ms cooldown, `z=0` only |
+
+Tile indices are shared across the three layers, so every surface-only rule above checks the
+player's `z` as well as the distance — otherwise a keeper in a mine tunnel or a shelter right
+below a workbench, a farm plot or a free tile could craft, plant, harvest or build through the
+floor.
 
 `seq` is echoed on the resulting `act` and on the `node` / `dig` / `chit`
 outcome, and correlates a request to its outcome for reconciliation and dedup
@@ -285,7 +290,7 @@ the player owns one.
 
 `inv`, `msg`, `stat`, `hp`, `act`, `actReject`, `node`, `dig`, `build`, `sd`,
 `crop`, `furn`, `torch`, `chest`, `mud`, `berg`, `boat`, `wave`, `win` — all
-identical in shape to the legacy server. `stat` is
+identical in shape to the legacy server. `regrow` is Go-only (§8.6). `stat` is
 `{ "t": "stat", "hunger": <int>, "thirst": <int> }`: both values are `ceil()` of the
 fractional simulation state, exactly as `Math.ceil(p.hunger)` in `server/index.js`. See §3.
 
@@ -341,7 +346,60 @@ node respawn timers. Two fields are stored as durations rather than absolute
 clocks, because neither clock survives a restart: node respawns as milliseconds
 remaining, and farms as ticks elapsed since planting.
 
+**When the map changes, the players stay and the world resets.** Every save
+carries the `WORLD_VERSION` and seed it was written under, and every tile index in
+it is only meaningful on that terrain. On load (`room.loadSave`):
+
+- **Same seed, same version** — a normal load.
+- **Same seed, older version** — a migration (`room.migrateSave`). Kept: every
+  profile (name, HP, hunger, thirst, inventory, tools, gear, worn gear, armor),
+  the monolith states (`mono`), `won`, `day` and `time`. Dropped: everything
+  tile-indexed — node respawns, mud, felled-tree counters, structures, digs,
+  torches, furniture, broken icebergs, farms, chest contents and modules (so beds
+  and campfires, and with them respawn points, go too). Each kept profile's `x`/`y`
+  becomes `persist.NoPos` (-1) and `z` becomes 0: the room never restores a position
+  outside the world, so the keeper joins at the normal spawn on the surface instead
+  of at coordinates that now mean different ground or inside a mine that is gone.
+  One line is logged (`world v4 -> v5: map changed — kept N player profiles, reset
+  the world`, plus the backup path below). The next save is written in the current
+  version, so a migration runs once; a profile nobody has rejoined keeps `NoPos`
+  until they do. Before anything can overwrite the old world, the file is copied
+  as-is to `<save file>.v<oldVersion>.bak` beside it (`world.default.save.json.v4.bak`,
+  `save.json.v4.bak`; through the optional `persist.Archiver` store capability, so
+  in-memory stores skip it). The copy is made once: if that `.bak` already exists a
+  rerun leaves it alone, so a crash mid-migration cannot replace the pristine copy.
+  A failed backup is logged and does not stop the server.
+- **Different seed, a newer version than this build, or no version** — the save is
+  ignored and the world starts fresh, profiles included (the next save overwrites it).
+
+The legacy server (`server/index.js`) follows the same rule, with `x`/`y` of -1 in
+its profiles.
+
 ---
+
+### 8.6 The land heals
+
+`gameserver/room/ecology.go`. Felling trees puts pressure on a 16×16 sector; the 8th felling
+sours up to 14 of its grass tiles to mud (`mud`, as before) and the pressure starts over. Ground
+under anything built never sours. Then the land recovers on its own:
+
+- **Rest.** A sector where no tree has been felled for 2 minutes is resting (fellings are not
+  saved, so after a restart every sector rests). Every 30 s a resting sector sheds one felling of
+  pressure, and each of its soured tiles turns back to grass with a 12% chance — about four
+  minutes for a tile on average.
+- **Regrowth.** A felled tree that grows back eases its sector by one felling and reclaims the
+  nearest soured tile within 3 tiles (ties to the lower tile index), resting or not.
+- **Never through a building or the blight.** A soured tile under a structure, a farm or any
+  module slot, or under corruption, stays mud until it is clear.
+
+```jsonc
+{ "t": "regrow", "tiles": [152487, 152490] }   // ascending tile indices, now grass again
+```
+
+The chunk overlay's `mud` list (§8.3) only ever carries tiles that are still soured. Creatures
+walk over farm plots like any open decor; only a blocking structure is gnawed (a hunter crossing
+a field used to chew the plot and its crop away). The legacy server sours ground but never heals
+it, and sends no `regrow`.
 
 ## 9. Slice 3 — creatures, wildlife, weather, creature combat
 
@@ -402,7 +460,7 @@ Wildlife species: `deer`, `boar` (Woods), `lizard`, `crab` (Dunes), `fox`, `hare
 | `chit` | broadcast | `{ id, ang, by, seq }` — a creature or animal took a non-lethal hit. `ang` points away from the attacker (the knockback direction); `by` + `seq` correlate it to the attacker's `act`. |
 | `hp` | to one player | Gains an `ang` field when the damage came from a creature: the direction to shove the player. |
 | `slow` | to one player | `{ ticks: 30 }` — the frost wraith's chilling touch. |
-| `ctel` | broadcast | `{ id }` — a brute or bog shambler has begun its 8-tick telegraph windup. |
+| `ctel` | broadcast | `{ id, ang, tk }` — a brute or bog shambler has begun its slam windup: 8 ticks to open an engagement, 5 for each follow-up (§13.6). |
 | `calert` | broadcast | `{ id }` — a creature has just locked on to a player (§13.3). Once per hunt, not per tick. |
 | `shot` | broadcast | `{ fx, fy, tx, ty }` for the brute's blight bolt, plus `kind: "lance"` for the blight lancer's beam. Coordinates rounded to 1 decimal. |
 | `sd` | broadcast | Already in Slice 2; creatures now also drive it by gnawing structures. |
@@ -604,7 +662,7 @@ While a wave is live:
 - a blight lancer's beam does **20** to the Engine rather than vaporising it outright, which is
   the only structure that survives a beam at all.
 
-Four things end a wave, and all four broadcast `{"t":"wave","secs":0}` so the client's
+Three things end a wave, and all three broadcast `{"t":"wave","secs":0}` so the client's
 countdown stops:
 
 | Ending | Extra broadcast |
@@ -612,7 +670,11 @@ countdown stops:
 | the timer runs out | `{"t":"win"}`, and `won` latches true |
 | a creature gnaws the Engine down | `msg` `THE WORLD ENGINE WAS DESTROYED! Rebuild it to try again.` |
 | a lancer beam finishes the Engine | the same `msg` |
-| a **player** demolishes their own Engine with `atk` | `msg` `You destroyed your own World Engine!` |
+
+A keeper cannot end it: `atk` never picks the Engine as a structure to demolish, during the wave
+or after it, so defenders can swing beside it freely (a swing next to it falls to the nearest
+other structure, if any). Earlier builds of both servers let a player demolish it, which
+cancelled the assault and refunded half its cost.
 
 `won` zeroes the creature cap for good and stops the nightly Blight Storm erosion of wooden
 structures. It is persisted, so a won world stays won across a restart. A destroyed Engine
@@ -697,8 +759,10 @@ at join time, so a reconnect is required — hence "then reconnect". A client th
 | `god` | — | toggle invulnerability: `godTick` heals the player to full at the top of every tick |
 | `wx` | `kind` (`rain` \| `sandstorm` \| `snowstorm`, anything else clears) | force weather for 180 s; broadcasts `wx` |
 | `time` | `v` (0..0.999) | set the world clock; the sim tick broadcasts it as usual |
-| `spawn` | `type` (a `CRE_TYPES` key) | spawn one creature 4-8 tiles away with `strength`-scaled hp and **no home tile**, so it never disengages |
+| `spawn` | `type` (a `CRE_TYPES` key), optional `lvl` (2-5) | spawn one creature 4-8 tiles away with `strength`-scaled hp and **no home tile**, so it never disengages; level 1 unless `lvl` is given (§13.6) |
 | `clearcre` | — | remove every creature |
+| `aitest` | `kind`: `swarm` \| `pack` \| `duel` \| `siege` \| `warlord` | enemy-AI set piece (§13.6): remove every creature, then spawn the scenario's squad at its levels 7-9 tiles away, homeless like `spawn`; the toast says what to watch for |
+| `monoreset` | — | every monolith back to dormant; broadcasts `{ t: "monoreset" }` (clients clear their lit monoliths). Strength drops with it; the Engine, a running wave and `won` are untouched |
 | `kill` | — | clear god mode, respawn at bed/campfire/spawn with full vitals; **pushes chunks** |
 
 Unknown `cmd` values are ignored silently, as in the legacy server.
@@ -1076,3 +1140,90 @@ in they are `shelter` (the same run as `run`; the client shouts about the storm 
 blight), then `hide` until it passes — then out again after the usual all-clear. Folk on other
 islands carry on. On every `wx`, up to two folk in earshot remark on it client-side
 (`src/folk.ts` `onWeather`).
+
+### 13.6 Enemy levels and the combat brain
+
+`gameserver/room/creature_levels.go` (levels, abilities), `creature_base.go` (base brain),
+`creature_attack.go` (attacks), `creature_elite.go` (level features). The legacy server has none
+of this: it sends 4-element `cre` rows and none of the frames below, and the client must keep
+working against it.
+
+**Levels.** Every creature has a level 1–5, sent as the **5th element of its `cre` row**:
+`["c12", 640.25, 641.00, "crawler", 2]`. A natural spawn rolls it: the type's tier (crawler,
+drowned, wisp 1; stalker, husk wolf, frost wraith 2; bog shambler, brute, blight lancer 3),
++1 per two lit monoliths, a veteran roll (+1 at 16%, +2 at 4%), +1 during the final assault,
+capped at 5. Each level above the tier adds 1 hp. A level-5 creature that can lead is an
+**alpha** (+50% hp); at most two are alive at once. `devcmd spawn` takes an optional `lvl`
+(2–5); without it a dev spawn is level 1.
+
+**Base brain — every creature, every level.** Perception, target choice, attack slots and
+steering (`creature_base.go`); every melee blow is telegraphed and every ranged shot is aimed
+before it fires (`creature_attack.go`).
+
+**Abilities by level.** A type only ever learns what its kit lists (`creKit`):
+
+| Ability | crawler | drowned | stalker | husk wolf | frost wraith | wisp | bog shambler | brute | blight lancer |
+|---|---|---|---|---|---|---|---|---|---|
+| flank — come at the keeper's side or back | 2 | 2 | 2 | 2 | | | | | 3 |
+| pack call — rouse allies on first sighting | 2 | 2 | | 2 | | | | | |
+| dodge — sidestep a swing | 3 | 3 | 3 | 3 | 3 | 3 | | | |
+| hit and run — fall back after a blow | 3 | 3 | 3 | 3 | | | | | |
+| charge — telegraphed dash | | 4 | 4 | 4 | | | 4 | 4 | |
+| lead shot — aim where the keeper is going | | | | | 4 | | | 4 | 4 |
+| alpha — leads a pack | 5 | | 5 | 5 | | | | 5 | |
+
+**Frames.** All broadcast. `ang` is radians in tile space (`atan2(dy, dx)`); `tk` is a count of
+200 ms ticks; coordinates are tiles rounded to 1 decimal.
+
+| Message | Meaning |
+| --- | --- |
+| `catk` | `{ id, ang, tk }` — a melee windup has begun. In `tk` ticks the creature lunges along `ang`; whoever is in reach of where it lands is hit. Not sent for brutes and bog shamblers, which send `ctel`. |
+| `ctel` | `{ id, ang, tk }` — a brute or bog shambler is winding up its slam (`ang`, `tk` added to the §9.3 shape). |
+| `caim` | `{ id, kind, tx, ty, tk }` — a ranged attack is being aimed at `(tx, ty)`; `kind` is `"bolt"` (brute) or `"lance"` (blight lancer). It fires as the usual `shot` after `tk` ticks, at that aim, so a keeper who moves off the line is missed. |
+| `cdodge` | `{ id, ang, by, seq }` — the creature sidestepped keeper `by`'s swing `seq`, hopping along `ang`. That swing's `act` carries `targetI: null` and nothing else is struck. |
+| `ccharge` | `{ id, ang, tk, len }` — a charge: after `tk` ticks of windup the creature dashes up to `len` tiles along `ang`. |
+| `crally` | `{ id }` — an alpha has rallied its pack. |
+| `cpanic` | `{ ids }` — an alpha fell; these creatures flee for a few seconds. |
+
+Every `hp` frame a creature causes — melee, charge, bolt or beam — carries `ang`; environmental
+damage never does (§9.3, and the wire suite tells the two apart by it).
+
+**Tuning** (ticks of 200 ms; tiles). Perception (`creature_base.go`): a keeper is noticed in
+sight with a clear line (blocking structures, modular walls and medic huts block it; water does
+not), heard within 6 tiles through anything, heard within 14 for 1.5 s after swinging, or smelled
+out to the scent radius (40) when carrying essence or meat — the legacy scent radius never
+worked. Among those noticed it takes the lowest of distance − 5 (struck it in the last 10 s)
+− 3 (already its prey) − 2 (keeper at ≤ 3 hp). At most 3 light melee hunters (crawler, drowned,
+stalker, husk wolf) within 8 tiles close in on one keeper; the rest circle a 3.2-tile ring at
+55% speed. Speed builds to full over two ticks and halves on a turn sharper than 100°; a hunter
+that neither closes 0.25 tiles nor walks 1.2 tiles in 10 ticks re-plans and sidesteps.
+
+Melee (`creature_attack.go`): a creature commits when a keeper is within trigger reach; the
+heading is fixed at the start, it stands still through the windup, then lunges and hits every
+keeper within 1.1 tiles of where it lands. Being struck cancels a light creature's windup or aim;
+heavies have super armor.
+
+| type | trigger | windup | lunge | recover | cooldown |
+|---|---|---|---|---|---|
+| crawler | 1.5 | 2 | 0.6 | 1 | 3 |
+| drowned | 1.6 | 2 | 0.7 | 1 | 3 |
+| stalker | 1.8 | 2 | 0.9 | 1 | 3 |
+| husk wolf | 1.9 | 2 | 1.0 | 1 | 3 |
+| frost wraith | 1.4 | 1 | 0.5 | 1 | 4 |
+| blight lancer | 1.3 | 3 | 0.3 | 1 | 4 |
+| brute | 2.5 | 8, then 5 | slam r 1.4 | 3 | 2 |
+| bog shambler | 2.5 | 8, then 5 | slam r 1.3 | 3 | 2 |
+
+Ranged: the lance aims 3 ticks and runs 9 tiles through its aim point, hitting keepers within 0.7
+of the beam up to the first blocking structure (which it still annihilates); the bolt aims 2 and
+hits keepers within 0.9 of its aim point. Both go through the armor like any creature hit.
+
+Abilities (`creature_elite.go`): dodge 30 / 35 / 45 % at levels 3 / 4 / 5, a 1-tile hop, 12-tick
+cooldown, never while winding up or charging. Charge from 4–8 tiles (heavies 3–7) on a clear
+line: 3-tick windup, dash 1.4 tiles/tick (heavies 1.0) for up to 8 tiles, damage + 1, a blocking
+structure in the way takes 2 (brute 6) and dazes the charger for 5 ticks; 40-tick cooldown
+(heavies 50). Hit and run: a level-3 crawler falls back 3 ticks after a blow (stalkers 7, wolves
+and drowned 4 at every level). Pack call and alpha reach 12 tiles. Followers — wolves of a wolf
+alpha, stalkers of a stalker alpha, crawlers of a crawler or brute alpha — hunt the alpha's prey
+within 26 tiles and run 10% faster near it. A struck alpha enrages them for 60 ticks (at most
+every 25); a slain one panics them for 15.

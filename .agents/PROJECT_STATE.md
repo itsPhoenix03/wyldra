@@ -1,7 +1,7 @@
 # Project state — Wyldra
 
-**Last updated:** 2026-10-18 · branch `dev` · session dump:
-`session-context-dump/2026-09-20_1700__modular-building.md`
+**Last updated:** 2026-10-18 · branch `feat/advance-enemy-ai` (uncommitted) · session dump:
+`session-context-dump/2026-10-18_2030__advanced-enemy-ai.md`
 
 This is the status source of truth. Update it in the same pass as any session dump.
 It describes the project **as it is now** — history lives in the session dumps.
@@ -121,7 +121,7 @@ save dir (`HEARTH_SAVE_DIR`) and spare ports rather than deleting
 ## 4. Shipped and working
 
 ### The game
-Deterministic 1280×1280 worldgen (4 major islands + Core + minor isles, `WORLD_VERSION = 4`);
+Deterministic 1280×1280 worldgen (4 major islands + Core + minor isles, `WORLD_VERSION = 5`);
 three z-layers; survival loop with hunger, thirst, thermal damage, weather and day/night;
 gathering, crafting, building, digging, farming, chests, boats, swimming; 9 creature types and
 7 animal species; wisp infection; two medic NPCs with a full bargain state machine; progression
@@ -146,7 +146,10 @@ mineshaft/shelter within 3.0 tiles of **both** endpoints, throttled `{t:'fix'}` 
 ### Multi-world hosting
 `gameserver/hosting` routes on the verified ticket (`wrong-instance` / `unknown-world` /
 `world-unavailable`). Rooms are lazy by default, `HEARTH_EAGER_WORLDS=1` flips it. Per-world
-save files. Cross-world isolation asserted directly; `-race` clean.
+save files. Cross-world isolation asserted directly; `-race` clean. A save from an older
+`WORLD_VERSION` on the same seed keeps its players (profiles, monoliths, `won`, clock) and resets
+the world, with keepers respawning at spawn; a different seed or newer version starts fresh
+(docs/10 §8.5, both servers). Bumping `WORLD_VERSION` is therefore all a map change needs.
 
 ### Room admission
 **4 players per room** (`room.DefaultMaxPlayers`, configurable per world via `maxPlayers` or
@@ -203,6 +206,74 @@ reach one, reacts to a fall, and answers the folk — greetings, scolding, shunn
 turns with them (one villager greets at a time).
 Surfacing from a mine lands on open ground by the shaft (`surfaceExit`), and a step within your
 own tile is never blocked (client + server), so nobody can be walled into a blocked tile. docs/10 §5.
+
+### Enemy AI: levels and the combat brain
+Every creature has a level 1–5 (5th element of its `cre` row; rolled from type tier, lit
+monoliths, a veteran roll and the final assault; ≤ 2 alphas alive). Three layers on top of
+the legacy port, each in its own file and struct embedded in `Creature`:
+`creature_base.go` (every enemy — sight lines, hearing, working scent radius, grudge and
+sticky targeting, 3 attack slots per keeper with the rest circling a ring, momentum, stuck
+recovery), `creature_attack.go` (every enemy — every melee blow and ranged shot is
+telegraphed (`catk` / `ctel` / `caim`) and lands where it was committed, so keepers can step
+out of it), and `creature_elite.go` (by level and type kit, `creature_levels.go creKit` —
+flank, pack call, dodge (`cdodge`), hit and run, charge (`ccharge`), lead shot, alpha with
+focus fire / `crally` / `cpanic` on death). `stepCreature` in creatures.go owns the call
+order. Client renders level pips / alpha crown and every telegraph (`src/main.ts`
+`cue*`, sounds in `src/audio.ts`); dev panel spawns take a level, and its "Enemy AI test"
+button (`devcmd aitest`: swarm / pack / duel / siege / warlord) clears the monsters and drops
+a scripted squad; "↺ Reset" (`devcmd monoreset`) puts every monolith back to dormant. Wire spec and tuning:
+docs/10 §13.6. Balance note: a crawler deals ~0.83 hp/s to a keeper who stands still
+(was 1.0); a hugged brute slams every ~2 s for 2 to everyone within 1.4 (was 2 per second).
+
+### Ecology: the land heals
+Over-felling still sours a sector's grass to mud (every 8th tree in a 16×16 sector), but it now
+recovers (`gameserver/room/ecology.go`, docs/10 §8.6): resting sectors (2 min without a felling)
+shed pressure and their mud turns back to grass (12% per 30 s pass per tile), and a regrown tree
+reclaims the nearest soured tile. Nothing heals or regrows through a building, farm, module or
+blight; healed tiles go out as `regrow`. Creatures walk over farm plots instead of gnawing them
+(that bug destroyed crops). The client hides world decor under built tiles.
+
+### World map v5: reshaped islands
+`WORLD_VERSION` 5 (`shared/world.js`): every major island is one designed landmass instead of a
+noise-jittered disc, shaped per biome by its `ISLE_PLANS` entry. Woods: lobed coast, two bays, a
+peninsula, a lake, rolling hills with forested L3 tops and two rock outcrops. Dunes: beaches, sand
+spits, crescent (barchan) dunes, flat pans, up to 8 placed rocks (tables, buttes, outcrops), an oasis. Spire: fjords, plateau, high massif, glaciers,
+tarns. Marsh: low and flat, pools, meandering channels, hummocks. Core: an irregular crater with an
+ash rim and six `lava_vent`s. Minors: one landmass each. `SIZE`, island centres and the minor isles
+are unchanged. Nodes and decor are placed by quota and score (`NODE_QUOTAS`, `DECOR_QUOTA`), not noise
+thresholds. Guarantees: monolith plazas, lore-note tiles, spawn, medics and villages sit in
+`CLEARINGS` (always land, levelled, node-free); no land specks under 12 tiles; every land tile
+climbable with +1 from the shore; no walled pockets, one-tile pillars or thin sea tongues; no straight
+cliff run over 6 or drawn ledge run over 8, no lone ledge dashes; rocks spaced (`placeRocks`: no 2x2 blocks, no rows of 3).
+`waterTemp` / `bergs` are derived after the mountain stamp.
+
+**Look at a generator change** with `node tools/worldmap/render.mjs [seed] [outDir] [--scale=N]
+[--crop=x,y,size[,name]]... [--metrics-only]`: an overview and per-island PNG crops, plus metrics (land,
+elevation split, lakes, land pieces, nodes per kind, cliffs / ledges, bumps / pits, reachability,
+landable coast, monolith / note checks). **Any generator change** bumps `WORLD_VERSION`, must keep
+`gameserver/world/` bit-exact (`node tools/worldparity/compare.mjs` / `npm run test:parity`) and
+re-pins the digests in `gameserver/world/world_test.go`. **Saves**: a same-seed save from an older
+version keeps its players and resets the world, after copying the old file to `<save>.v<old>.bak`
+(Multi-world hosting above, docs/10 §8.5). Detail: `docs/MAP_EXPANSION_GUIDE.md`, "World Generator (v5)".
+
+### Title screen: the Whispering Woods
+`index.html` (`#menu`) is laid out like a game title screen: the logo and a vertical menu on the
+left — **Play** (straight into the shared world), Create room, Join room, Settings; one choice is
+always selected, hover / focus / arrow keys / W-S move it, its hint shows below, Enter picks it
+(`menu.ts wireMainMenu`). Behind it, a Woods landscape running off every edge (the owner asked for
+no island ringed by water): terraced meadows of the game's grass / flower-grass tiles with soil
+cliffs, a river winding down the valley to a coast in the near-right corner, and the game's own
+pine, oak and autumn trees, bushes and glowcaps — no characters or animals (owner's request).
+Golden-hour light, drifting cloud shadows and rising motes are CSS over it; the layers lean with
+the pointer (`wireParallax`). The scene is a deterministic height map (`src/menuArt.ts`,
+`BACKDROPS[BACKDROP]`; a Frozen Spire island is the other choice) that
+`tools/atlas/build-atlases.mjs` renders with resvg into one PNG (`assets/atlas/menu-<biome>.<hash>.png`,
+`atlas.json menuBackdrop` with its biome and frame, ~0.9 MB for the Woods): tile columns stacked
+one tile-thickness apart, each plant drawn right after its own column, a 1700 x 1000 window cut
+from inside a 64-cell grid. `src/menuScene.ts` hangs the picture once decoded and sets
+`#menu[data-biome][data-frame]` for the CSS. Measured: ~0.6% main thread steady, zero
+main-thread paints, ~1.1 s at load (the original menu ~1.2 s); 80 DOM nodes. Inspect a moment by
+freezing animations with `#menu * { animation-delay: -Ns !important; animation-play-state: paused !important }`.
 
 ### Dev tooling
 F9 kit and F10 panel, gated on the ticket's `dev` claim. `HEARTH_DEV_ALL=1` (set by
@@ -291,6 +362,7 @@ player's and enemy's attack radius and heading (`src/devOverlay.ts`; radii mirro
 | **Go game server** (authoritative) | `gameserver/` |
 | — worldgen, bit-exact port | `gameserver/world/` **(verified — do not edit without re-running parity)** |
 | — room loop, handlers, AI, medic, dev | `gameserver/room/` |
+| — enemy levels / base brain / attacks / abilities | `gameserver/room/creature_{levels,base,attack,elite}.go` |
 | — multi-world routing | `gameserver/hosting/` |
 | — ticket verification | `gameserver/auth/` |
 | — chunk RLE codec | `gameserver/proto/` |
@@ -310,6 +382,7 @@ player's and enemy's attack radius and heading (`src/devOverlay.ts`; radii mirro
 | All art | `assets/sprites/**` (SVG only) |
 | Dev stack launcher | `tools/dev/stack.mjs` |
 | Worldgen parity harness | `tools/worldparity/` |
+| World map renderer / metrics | `tools/worldmap/` |
 | Defs generator | `tools/defs/gen-defs.mjs` |
 | Test suites | `gameserver/test-go.mjs`, `gameserver/test-multiworld.mjs`, `control/test.mjs`, `test.mjs` (legacy) |
 | Deep technical reference | `AGENT_GUIDE.html` |

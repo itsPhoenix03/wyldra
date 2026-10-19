@@ -44,6 +44,10 @@ type Player struct {
 	// velocity that implies, so hunters can lead a moving target (creature_ai.go).
 	PrevX, PrevY, VX, VY float64
 	velSeeded            bool
+	// FaceX, FaceY is the unit heading the keeper last faced: its walking
+	// direction, or its last swing's. (0, 0) until it has done either. Flanking
+	// creatures use it to find the keeper's back (creature_elite.go).
+	FaceX, FaceY float64
 
 	// Movement validation clocks, all in ms since the Unix epoch, mirroring the
 	// legacy server's Date.now() fields one for one.

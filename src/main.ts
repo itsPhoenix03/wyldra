@@ -20,6 +20,7 @@ import {
   DECOR_NONBLOCKING,
   FURNITURE,
   MODULES,
+  MODULE_SLOTS,
 } from "../shared/defs.js";
 import { isNightTime, NIGHT_START } from "../shared/time.js";
 import { Rig, type RigStatus } from "./rig.ts";
@@ -99,6 +100,11 @@ const CRE_STOMP: Record<string, { dur: number; h: number }> = {
   brute: { dur: 0.5, h: 9 },
   bog_shambler: { dur: 0.55, h: 8 },
 };
+/** White blended toward `col` by i (0..1), as a tint int (no allocation: it runs per frame in a windup). */
+const mixWhite = (col: number, i: number) =>
+  (((255 + (((col >> 16) & 255) - 255) * i) | 0) << 16) |
+  (((255 + (((col >> 8) & 255) - 255) * i) | 0) << 8) |
+  ((255 + ((col & 255) - 255) * i) | 0);
 // decor/furniture kind -> texture key. SINGLE source of truth — ghost preview,
 // addStruct (outdoor) and addFurn (indoor) must all use this map.
 const DECOR_TEX: Record<string, string> = {
@@ -295,6 +301,8 @@ class Hearth extends Phaser.Scene {
   >();
   monoSpr: Phaser.GameObjects.Sprite[] = [];
   creSpr = new Map<string, Phaser.GameObjects.Sprite>();
+  private teleN = 0;   // live ground telegraphs (aim line, charge strip, rally ring), capped
+  private healMsgAt = -1e9;   // last "the land is healing" toast (they come in waves)
   aniSpr = new Map<string, Phaser.GameObjects.Sprite>();
   nodeSpr = new Map<number, Phaser.GameObjects.Sprite>();
   structSpr = new Map<
@@ -511,6 +519,55 @@ class Hearth extends Phaser.Scene {
       gd.generateTexture("fx-death", 6, 6);
       gd.destroy();
     }
+    this.bakeEnemyFx();
+  }
+
+  /** Enemy level badges, the alpha's ground glow and the "?" / "dodge" floaters: baked once, reused as Images. */
+  private bakeEnemyFx() {
+    if (this.textures.exists("fx-crown")) return;
+    const g = this.add.graphics();
+    const pip = [0, 0, 0xe9e6d6, 0xffbb33, 0xff5a24];   // lvl 2 pale, 3 amber, 4 orange-red
+    for (let lv = 2; lv <= 4; lv++) {
+      g.clear();
+      for (let i = 0; i < lv - 1; i++) {
+        g.fillStyle(0x1b0c08, 0.9).fillCircle(4.5 + i * 7, 4.5, 4);
+        g.fillStyle(pip[lv], 1).fillCircle(4.5 + i * 7, 4.5, 2.8);
+        g.fillStyle(0xffffff, 0.55).fillCircle(3.7 + i * 7, 3.6, 1);
+      }
+      g.generateTexture(`fx-lvl${lv}`, 9 + (lv - 2) * 7, 9);
+    }
+    g.clear();   // lvl 5, the alpha: a gold crown with crimson stones
+    const crown = [{ x: 2, y: 14 }, { x: 2, y: 5 }, { x: 7, y: 9 }, { x: 12, y: 2 }, { x: 17, y: 9 }, { x: 22, y: 5 }, { x: 22, y: 14 }];
+    g.fillStyle(0xffd24a, 1).fillPoints(crown, true);
+    g.lineStyle(1.5, 0x3a0a08, 1).strokePoints(crown, true);
+    g.fillStyle(0xb8800f, 1).fillRect(3, 11, 18, 2.5);
+    for (const [x, y] of [[2, 5], [12, 2.5], [22, 5]]) g.fillStyle(0xe0143c, 1).fillCircle(x, y, 1.8);
+    g.generateTexture("fx-crown", 24, 16);
+    g.destroy();
+    // soft ground ellipse (a circle squashed to the iso tile ratio); tinted and added under an alpha
+    const c = document.createElement("canvas");
+    c.width = 96; c.height = 48;
+    const cx = c.getContext("2d")!;
+    cx.scale(1, 0.5);
+    const rg = cx.createRadialGradient(48, 48, 0, 48, 48, 48);
+    rg.addColorStop(0, "rgba(255,255,255,0.9)");
+    rg.addColorStop(0.5, "rgba(255,255,255,0.35)");
+    rg.addColorStop(1, "rgba(255,255,255,0)");
+    cx.fillStyle = rg;
+    cx.fillRect(0, 0, 96, 96);
+    this.textures.addCanvas("fx-alpha-glow", c);
+    for (const [key, txt, col, px] of [["fx-q", "?", "#ffd84a", 16], ["fx-dodge", "dodge", "#e6e9ee", 12]] as const) {
+      const w = document.createElement("canvas"), wc = w.getContext("2d")!;
+      const font = `bold ${px}px Georgia, serif`;
+      wc.font = font;
+      w.width = Math.ceil(wc.measureText(txt).width) + 8; w.height = px + 9;
+      wc.font = font;   // resizing the canvas resets its state
+      wc.lineJoin = "round"; wc.lineWidth = 3.5; wc.strokeStyle = "#1c1a12";
+      wc.strokeText(txt, 4, px + 2);
+      wc.fillStyle = col;
+      wc.fillText(txt, 4, px + 2);
+      this.textures.addCanvas(key, w);
+    }
   }
 
   // Task 4: send wear request
@@ -576,6 +633,7 @@ class Hearth extends Phaser.Scene {
       SPOTS.map(([n, x, y]) => `<button data-tp="${x},${y}">${n}</button>`).join("") +
       `<div style="color:#9ab;margin:6px 0 4px">Activate Monolith</div>` +
       [0, 1, 2, 3].map((i) => `<button data-mono="${i}">M${i + 1}</button>`).join("") +
+      `<button data-cmd="monoreset" title="All four back to dormant, as in a new world">↺ Reset</button>` +
       `<div style="color:#9ab;margin:6px 0 4px">Weather (biome-specific)</div>` +
       `<button data-wx="rain">🌧 Rain</button>` +
       `<button data-wx="sandstorm">🌪 Sand</button>` +
@@ -585,7 +643,7 @@ class Hearth extends Phaser.Scene {
       `<button data-time="0.3">☀ Day</button>` +
       `<button data-time="0.8">🌙 Night</button>` +
       `<div style="color:#9ab;margin:6px 0 4px">Spawn enemy (one at a time)</div>` +
-      `<select id="devSpawnSel">` +
+      `<div style="display:flex;gap:4px"><select id="devSpawnSel">` +
       `<optgroup label="Melee — early">` +
       `<option value="crawler">Crawler · fodder</option>` +
       `<option value="drowned">Drowned · swims</option>` +
@@ -604,8 +662,19 @@ class Hearth extends Phaser.Scene {
       `<option value="wisp">Wisp · infects land, flees</option>` +
       `</optgroup>` +
       `</select>` +
+      `<select id="devSpawnLvl" title="Enemy level">` +
+      [1, 2, 3, 4, 5].map((n) => `<option value="${n}">Lv ${n}${n === 5 ? " alpha" : ""}</option>`).join("") +
+      `</select></div>` +
       `<div><button data-cmd="spawn">👾 Spawn</button>` +
       `<button data-cmd="clearcre">🧹 Clear all</button></div>` +
+      `<div style="color:#9ab;margin:6px 0 4px">Enemy AI test (clears monsters first)</div>` +
+      `<div style="display:flex;gap:4px"><select id="devAiSel">` +
+      `<option value="swarm">Swarm · slots + telegraphs</option>` +
+      `<option value="pack">Wolf pack · flank + alpha</option>` +
+      `<option value="duel">Duelists · dodge + charge</option>` +
+      `<option value="siege">Siege · aimed shots</option>` +
+      `<option value="warlord">Warlord · brute leads</option>` +
+      `</select><button data-cmd="aitest">⚔ Test</button></div>` +
       `<div style="margin-top:6px">` +
       `<button data-cmd="god">🛡 God toggle</button>` +
       `<button data-cmd="kill">💀 Kill</button>` +
@@ -620,8 +689,8 @@ class Hearth extends Phaser.Scene {
       `</div>` +
       `<style>#devPanel button{background:#2a3a4a;color:#fff;border:1px solid #57a;border-radius:4px;` +
       `margin:2px;padding:3px 7px;cursor:pointer;font:12px monospace}#devPanel button:hover{background:#3a5a4a}` +
-      `#devSpawnSel{width:100%;background:#1a222c;color:#fff;border:1px solid #57a;border-radius:4px;` +
-      `font:12px monospace;padding:3px}</style>`;
+      `#devSpawnSel,#devSpawnLvl,#devAiSel{background:#1a222c;color:#fff;border:1px solid #57a;border-radius:4px;` +
+      `font:12px monospace;padding:3px}#devSpawnSel,#devAiSel{flex:1;min-width:0}</style>`;
     document.body.appendChild(d);
     const ranges = document.getElementById("devRanges") as HTMLInputElement;
     ranges.checked = this.dev.rangesOn;
@@ -640,7 +709,11 @@ class Hearth extends Phaser.Scene {
       else if (b.dataset.cmd === "kit") this.send({ t: "dev" });
       else if (b.dataset.cmd === "spawn") {
         const sel = document.getElementById("devSpawnSel") as HTMLSelectElement | null;
-        this.send({ t: "devcmd", cmd: "spawn", type: sel?.value || "crawler" });
+        const lvl = +((document.getElementById("devSpawnLvl") as HTMLSelectElement | null)?.value || 1);
+        this.send({ t: "devcmd", cmd: "spawn", type: sel?.value || "crawler", ...(lvl > 1 ? { lvl } : {}) });
+      } else if (b.dataset.cmd === "aitest") {
+        const kind = (document.getElementById("devAiSel") as HTMLSelectElement | null)?.value || "swarm";
+        this.send({ t: "devcmd", cmd: "aitest", kind });
       }
       else if (b.dataset.cmd) this.send({ t: "devcmd", cmd: b.dataset.cmd });
     });
@@ -1815,6 +1888,18 @@ class Hearth extends Phaser.Scene {
         this.setTileMut(i, "mud");
       }
       showMsg("The soil sours — this sector's ecosystem is collapsing!");
+    } else if (m.t === "regrow") {
+      // the land heals: soured ground turns back to grass (a blighted tile keeps its blight until cured)
+      let near = false;
+      for (const i of m.tiles) {
+        this.mud.delete(i);
+        if (this.mutTiles.get(i) === "mud") this.setTileMut(i, null);
+        if (Math.hypot((i % SIZE) - this.px, ((i / SIZE) | 0) - this.py) < 20) near = true;
+      }
+      if (near && this.time.now - this.healMsgAt > 90000) {
+        this.healMsgAt = this.time.now;
+        showMsg("🌱 The land is healing — grass reclaims the soured soil.", 3000);
+      }
     } else if (m.t === "dig") {
       if (m.by === this.id && m.seq === this.pendingActSeq) this.audio.chop();
       if (m.by === this.id && m.tiles?.length) {
@@ -1853,7 +1938,8 @@ class Hearth extends Phaser.Scene {
     } else if (m.t === "infect") {
       for (const i of m.tiles) this.setTileMut(i, "blight");
     } else if (m.t === "cure") {
-      for (const i of m.tiles) this.setTileMut(i, null);
+      // the blight lifts to whatever lies under it: soured ground stays mud
+      for (const i of m.tiles) this.setTileMut(i, this.mud.has(i) ? "mud" : null);
     } else if (m.t === "wx") {
       this.weather = m.kind;
       if (m.kind === "rain") showMsg("🌧 Rain sweeps across the lowlands.");
@@ -1917,6 +2003,7 @@ class Hearth extends Phaser.Scene {
           ex.destroy();
           this.exitSpr.delete(m.i);
         }
+        this.syncDecor(m.i); // the ground's own decor shows again
       } else {
         s.hp = m.hp;
         this.tweens.add({
@@ -1926,6 +2013,10 @@ class Hearth extends Phaser.Scene {
           yoyo: true,
         });
       }
+    } else if (m.t === "monoreset") {
+      // dev panel: every monolith back to dormant (the lit tint is the only tint they carry)
+      this.mono = [false, false, false, false];
+      this.monoSpr.forEach((s) => s.clearTint());
     } else if (m.t === "mono") {
       this.mono[m.i] = true;
       this.monoSpr[m.i]?.setTint(0x6dd6c8);
@@ -2038,13 +2129,15 @@ class Hearth extends Phaser.Scene {
       // brute telegraph: tint brute 0xffaa00 + play telegraph sound (Guide §3.3)
       const bs = this.creSpr.get(m.id);
       if (bs) {
-        creatureLookAt(bs, this.nearestPlayer(bs), 0.9);   // squares up to its prey for the windup
+        // squares up to its prey (or along the slam, when the server says which way) for the windup
+        if (typeof m.ang === "number") this.lookAlong(bs, m.ang, 0.9);
+        else creatureLookAt(bs, this.nearestPlayer(bs), 0.9);
         bs.setTint(0xffaa00);
         this.audio.telegraph();
         this.startCreatureJump(bs, CRE_STOMP[bs.getData("ctype")]);
-        // tint clears when next cre broadcast updates position (windup is 8 ticks ~0.8s)
+        // tint clears when the windup ends (tk 200 ms ticks; 8 ticks ~0.8s on the legacy server)
         // scene-owned timer: dies with the scene, so it can never touch a sprite freed by a quit
-        this.time.delayedCall(900, () => bs.clearTint());
+        this.time.delayedCall(typeof m.tk === "number" ? m.tk * 200 + 100 : 900, () => bs.active && bs.clearTint());
       }
     } else if (m.t === "calert") {
       // a creature has spotted its prey: a "!" pops over it
@@ -2060,7 +2153,13 @@ class Hearth extends Phaser.Scene {
           .setDepth(cs.depth + 2);
         this.tweens.add({ targets: t, y: t.y - 10, duration: 160, yoyo: true, hold: 380, onComplete: () => t.destroy() });
       }
-    } else if (m.t === "stat") {
+    } else if (m.t === "catk") this.cueAttack(m);
+    else if (m.t === "caim") this.cueAim(m);
+    else if (m.t === "cdodge") this.cueDodge(m);
+    else if (m.t === "ccharge") this.cueCharge(m);
+    else if (m.t === "crally") this.cueRally(m);
+    else if (m.t === "cpanic") this.cuePanic(m);
+    else if (m.t === "stat") {
       this.hunger = m.hunger;
       this.thirst = m.thirst;
     } else if (m.t === "shot") {
@@ -2074,6 +2173,7 @@ class Hearth extends Phaser.Scene {
         Math.hypot(c.getData("cx") - m.fx, c.getData("cy") - m.fy) < 1.5);
       let ax: number, ay: number, depth = 999969;
       if (shooter) {
+        this.endAim(shooter);   // the aim line has done its job: the shot is away
         creatureLookAt(shooter, b, lance ? 0.9 : 0.7);
         // the shot leaves the muzzle for the way it is turning to fire (it turns this frame)
         const view = pickView(bx - shooter.x, by - shooter.y, shooter.getData("gView") ?? "front");
@@ -2153,7 +2253,7 @@ class Hearth extends Phaser.Scene {
       this.wtime = m.time;
       if (m.day) this.day = m.day;
       const seen = new Set<string>();
-      for (const [cid, x, y, type] of m.c) {
+      for (const [cid, x, y, type, lv] of m.c) {   // lv: 5th element, level 1-5 (the legacy server sends 4)
         seen.add(cid);
         let s = this.creSpr.get(cid);
         const p = this.isoE(x, y);
@@ -2176,8 +2276,11 @@ class Hearth extends Phaser.Scene {
           s.setScale(base);
           s.setData("ctype", type)
             .setData("gBase", base)
-            .setData("gPhase", Math.random() * 10);
+            .setData("gPhase", Math.random() * 10)
+            .setData("lvl", 1);
         }
+        const lvl = lv >= 2 ? Math.min(5, lv | 0) : 1;
+        if (s.getData("lvl") !== lvl) this.setCreatureLevel(s, lvl);
         sampleCreature(s, x, y, this.time.now); // ground speed + facing, before cx/cy move on
         s.setData("tx", p.x).setData("ty", p.y).setData("cx", x).setData("cy", y);
       }
@@ -2188,7 +2291,7 @@ class Hearth extends Phaser.Scene {
         m.r > 0 && Math.hypot(s.getData("cx") - this.px, s.getData("cy") - this.py) > m.r - 3;
       for (const [cid, s] of this.creSpr)
         if (!seen.has(cid) && outOfRange(s)) {
-          s.getData("jShadow")?.destroy();
+          this.dropCreatureFx(s);
           s.destroy();
           this.creSpr.delete(cid);
         } else if (!seen.has(cid)) {
@@ -2226,7 +2329,7 @@ class Hearth extends Phaser.Scene {
               s.destroy();
             },
           });
-          s.getData("jShadow")?.destroy();
+          this.dropCreatureFx(s);
           this.creSpr.delete(cid);
         }
       const aseen = new Set<string>();
@@ -2300,7 +2403,8 @@ class Hearth extends Phaser.Scene {
     const ds = this.add
       .image(dp.x, dp.y, key)
       .setOrigin(0.5, 0.92)
-      .setDepth(dp.y + 18); // lifted ground y, like every mover (see trackLift)
+      .setDepth(dp.y + 18) // lifted ground y, like every mover (see trackLift)
+      .setVisible(!this.tileBuilt(i));
     this.decorSpr.set(i, ds);
   }
 
@@ -2450,12 +2554,27 @@ class Hearth extends Phaser.Scene {
     spr.setScale(0.6).setY(finalY - 10);
     this.tweens.add({ targets: spr, scaleX: 1, scaleY: 1, y: finalY, duration: 160, ease: "Back.easeOut" });
     this.modSpr.set(key, spr);
+    this.syncDecor(i);
   }
 
   removeModule(i: number, slot: string) {
     const key = `${i}:${slot}`;
     this.modSpr.get(key)?.destroy();
     this.modSpr.delete(key);
+    this.syncDecor(i);
+  }
+
+  /** Something (a structure or any module slot) is built on tile i. */
+  private tileBuilt(i: number) {
+    if (this.structSpr.has(i)) return true;
+    for (const slot of MODULE_SLOTS as string[]) if (this.modSpr.has(`${i}:${slot}`)) return true;
+    return false;
+  }
+
+  /** World decor (glow mushrooms, totems...) hides under whatever is built on its tile, and returns when it goes. */
+  private syncDecor(i: number) {
+    const ds = this.decorSpr.get(i);
+    if (ds) ds.setVisible(!this.tileBuilt(i));
   }
 
   applyChunkMsg(m: ChunkMsg) {
@@ -2626,6 +2745,7 @@ class Hearth extends Phaser.Scene {
     const glowA = this.z !== 0 ? 0.03 : 0.1;
     entry.glow?.setAlpha(glowA).setData("baseA", glowA);
     this.structSpr.set(i, entry);
+    this.syncDecor(i);
   }
 
   addTorch(i: number) {
@@ -3048,6 +3168,240 @@ class Hearth extends Phaser.Scene {
     s.setData("jT", 0).setData("jDur", spec.dur).setData("jH", spec.h).setData("jLanded", false);
   }
 
+  // --- advanced enemy AI: levels and telegraph cues (docs/10 §13.6) --------------------
+  // All cosmetic, client-local and scene-owned (tweens / this.add), so a quit-to-menu tears
+  // them down with the scene. A cue for a creature that is unseen, underground or far off
+  // is dropped; so is any message naming a creature we hold no sprite for.
+
+  /** Level 2-5 badge (plus the alpha's ground glow at 5) on a creature; level 1 carries neither. */
+  private setCreatureLevel(s: Phaser.GameObjects.Sprite, lvl: number) {
+    s.setData("lvl", lvl);
+    const bd: Phaser.GameObjects.Image | undefined = s.getData("badge");
+    const gl: Phaser.GameObjects.Image | undefined = s.getData("glow");
+    const key = lvl === 5 ? "fx-crown" : `fx-lvl${lvl}`;
+    if (lvl < 2 || !this.textures.exists(key)) {
+      bd?.destroy(); gl?.destroy();
+      s.setData("badge", undefined).setData("glow", undefined);
+      return;
+    }
+    if (bd) bd.setTexture(key);
+    else s.setData("badge", this.add.image(s.x, s.y, key).setOrigin(0.5, 1).setVisible(s.visible));
+    if (lvl < 5) { gl?.destroy(); s.setData("glow", undefined); }
+    else if (!gl)
+      s.setData("glow", this.add.image(s.x, s.y, "fx-alpha-glow")
+        .setBlendMode(Phaser.BlendModes.ADD).setTint(0xff4a2a)
+        .setScale((s.displayWidth * 2.2) / 96).setVisible(s.visible));
+  }
+
+  /** Everything hung on a creature sprite besides its body: leap shadow, badge, glow, aim line. */
+  private dropCreatureFx(s: Phaser.GameObjects.Sprite) {
+    s.getData("jShadow")?.destroy();
+    s.getData("badge")?.destroy();
+    s.getData("glow")?.destroy();
+    this.endAim(s);
+  }
+
+  /** A creature's sprite for a cue, or undefined when the cue isn't worth drawing (hidden or > 30 tiles off). */
+  private cueSprite(id: string) {
+    const s = this.creSpr.get(id);
+    if (!s || !s.active || !s.visible) return undefined;
+    return Math.hypot(s.getData("cx") - this.px, s.getData("cy") - this.py) <= 30 ? s : undefined;
+  }
+
+  /** Close enough to the keeper to bother with a sound. */
+  private hear(s: Phaser.GameObjects.Sprite, tiles = 16) {
+    return Math.hypot(s.getData("cx") - this.px, s.getData("cy") - this.py) < tiles;
+  }
+
+  /** A tile-space offset as screen px: the iso projection (no elevation), as in iso(). */
+  private isoOff(dx: number, dy: number) {
+    return { x: ((dx - dy) * TW) / 2, y: ((dx + dy) * TH) / 2 };
+  }
+
+  /** Turn a creature to face along a tile-space angle (it keeps looking at a point 3 tiles that way). */
+  private lookAlong(s: Phaser.GameObjects.Sprite, ang: number, secs: number) {
+    const u = this.isoOff(Math.cos(ang) * 3, Math.sin(ang) * 3);
+    creatureLookAt(s, { x: s.x + u.x, y: s.y + u.y }, secs);
+  }
+
+  /** The creature's cue offset (screen px, h = hop height), stopped and zeroed ready for a new cue. */
+  private creOff(s: Phaser.GameObjects.Sprite): { x: number; y: number; h: number } {
+    let o = s.getData("off");
+    if (!o) s.setData("off", (o = { x: 0, y: 0, h: 0 }));
+    this.tweens.killTweensOf(o);
+    o.x = o.y = o.h = 0;
+    return o;
+  }
+
+  /** Tint pulse toward `col` over `ms`, brighter as the blow nears. A hit flash (tint fill) wins; baseTint is restored. */
+  private cueTint(s: Phaser.GameObjects.Sprite, col: number, ms: number) {
+    const base = s.getData("baseTint");
+    const st = { k: 0 };
+    s.setData("flashing", true);   // keeps the gait's own tint (the lancer's glow) out of the way
+    this.tweens.add({
+      targets: st, k: 1, duration: ms,
+      onUpdate: () => {
+        if (!s.active || s.tintFill) return;
+        s.setTint(mixWhite(col, st.k * (0.55 + 0.45 * Math.sin(st.k * 16)))).setData("flashing", true);
+      },
+      onComplete: () => {
+        if (!s.active) return;
+        s.clearTint().setData("flashing", false);
+        if (base) s.setTint(base);
+      },
+    });
+  }
+
+  /** Crouch back a few px against `ang` for `ms`, then (a melee windup) lunge 0.6 tile along it and settle. */
+  private cueWindup(s: Phaser.GameObjects.Sprite, ang: number, ms: number, lunge: boolean) {
+    const off = this.creOff(s);
+    const u = this.isoOff(Math.cos(ang), Math.sin(ang));   // one tile along ang, screen px
+    const n = Math.hypot(u.x, u.y) || 1;
+    const hear = this.hear(s);
+    const settle = () => { this.tweens.add({ targets: off, x: 0, y: 0, duration: 160, ease: "Quad.easeOut" }); };
+    this.tweens.add({
+      targets: off, x: (-u.x / n) * 5, y: (-u.y / n) * 5 + 1.5, duration: ms, ease: "Sine.easeInOut",
+      onComplete: () => {
+        if (!lunge) return settle();
+        if (hear && s.active) this.audio.lunge();
+        this.tweens.add({ targets: off, x: u.x * 0.6, y: u.y * 0.6, duration: 90, ease: "Quad.easeOut", onComplete: settle });
+      },
+    });
+  }
+
+  /** A short-lived baked word ("?", "dodge") over a creature's head, like calert's "!". */
+  private cueFloater(s: Phaser.GameObjects.Sprite, key: string) {
+    if (!this.textures.exists(key)) return;
+    const t = this.add.image(s.x, s.y - s.displayHeight - (s.getData("badge") ? 12 : 2), key)
+      .setOrigin(0.5, 1).setDepth(s.depth + 2);
+    this.tweens.add({ targets: t, y: t.y - 10, duration: 160, yoyo: true, hold: 380, onComplete: () => t.destroy() });
+  }
+
+  /** A ground telegraph at (x, y): drawn once (the callback), after that only its alpha / scale move. Capped. */
+  private teleStart(x: number, y: number, draw: (g: Phaser.GameObjects.Graphics) => void) {
+    if (this.teleN >= 16) return undefined;
+    this.teleN++;
+    const g = this.add.graphics({ x, y }).setDepth(0.5);   // above the terrain (-1), under every body
+    draw(g);
+    g.once("destroy", () => this.teleN--);
+    return g;
+  }
+
+  /** Stop and remove a shooter's aim line (its shot is away, or it is gone). */
+  private endAim(s: Phaser.GameObjects.Sprite) {
+    const a = s.getData("aimFx");
+    if (!a) return;
+    s.setData("aimFx", undefined);
+    a.tw.stop();
+    a.g.destroy();
+  }
+
+  /** catk: a melee windup. Face the way it will strike, crouch and glow warm, then lunge when it lands. */
+  private cueAttack(m: any) {
+    const s = this.cueSprite(m.id);
+    if (!s || typeof m.ang !== "number") return;
+    const ms = Math.max(100, (m.tk || 2) * 200);
+    this.lookAlong(s, m.ang, ms / 1000 + 0.15);
+    this.cueTint(s, 0xff6a2e, ms);
+    this.cueWindup(s, m.ang, ms, true);
+  }
+
+  /** caim: a thin line from the shooter to the aim tile, brightening and pulsing until it fires (the `shot`). */
+  private cueAim(m: any) {
+    const s = this.cueSprite(m.id);
+    if (!s || typeof m.tx !== "number" || typeof m.ty !== "number") return;
+    this.endAim(s);
+    const lance = m.kind === "lance";
+    const ms = Math.max(200, (m.tk || 3) * 200);
+    const a = this.isoE(m.tx, m.ty);
+    const ox = s.getData("gvx") ?? s.x, oy = s.getData("gvy") ?? s.y;
+    const col = lance ? 0xff4a22 : 0xb45cff;
+    creatureLookAt(s, a, ms / 1000 + 0.2);
+    const g = this.teleStart(0, 0, (g) => {
+      g.lineStyle(lance ? 7 : 5, col, 0.28).lineBetween(ox, oy, a.x, a.y);
+      g.lineStyle(lance ? 2.5 : 1.5, col, 1).lineBetween(ox, oy, a.x, a.y);
+      g.lineStyle(2, col, 0.9).strokeEllipse(a.x, a.y, 38, 19);   // where it will land
+    });
+    if (!g) return;
+    const st = { k: 0 };
+    const tw = this.tweens.add({
+      targets: st, k: 1, duration: ms,
+      onUpdate: () => g.setAlpha((0.25 + 0.75 * st.k) * (0.7 + 0.3 * Math.sin(st.k * ms / 55))),
+      onComplete: () => { g.destroy(); if (s.active && s.getData("aimFx")?.g === g) s.setData("aimFx", undefined); },
+    });
+    s.setData("aimFx", { g, tw });
+    if (this.hear(s)) this.audio.aim(ms / 1000);
+  }
+
+  /** cdodge: it sidestepped a swing. The hop's travel is the next `cre` frame's job (the server has moved it); this adds the arc. */
+  private cueDodge(m: any) {
+    const s = this.cueSprite(m.id);
+    if (!s || typeof m.ang !== "number") return;
+    const d = this.isoOff(Math.cos(m.ang) * 0.35, Math.sin(m.ang) * 0.35);
+    this.tweens.add({ targets: this.creOff(s), x: d.x, y: d.y, h: 14, duration: 150, ease: "Quad.easeOut", yoyo: true });
+    this.lookAlong(s, m.ang, 0.4);
+    this.cueFloater(s, "fx-dodge");
+    if (this.hear(s)) this.audio.whiff();
+  }
+
+  /** ccharge: a translucent red strip along the dash for `len` tiles, pulsing through the windup, fading after. */
+  private cueCharge(m: any) {
+    const s = this.cueSprite(m.id);
+    if (!s || typeof m.ang !== "number") return;
+    const ms = Math.max(200, (m.tk || 3) * 200);
+    const len = Math.min(14, Math.max(1, +m.len || 4));
+    this.lookAlong(s, m.ang, ms / 1000 + 0.2);
+    this.cueTint(s, 0xff3a22, ms);
+    this.cueWindup(s, m.ang, ms, false);
+    if (this.hear(s)) this.audio.charge();
+    const c = Math.cos(m.ang), n = Math.sin(m.ang), hw = 0.45;   // hw: body half-width, tiles
+    const P = (along: number, across: number) => this.isoOff(c * along - n * across, n * along + c * across);
+    const g = this.teleStart(s.getData("gvx") ?? s.x, s.getData("gvy") ?? s.y, (g) => {
+      const q = [P(0, -hw), P(len, -hw), P(len, hw), P(0, hw)];
+      g.fillStyle(0xd62a18, 0.45).fillPoints(q, true);
+      g.lineStyle(2, 0xff6a44, 0.9).strokePoints(q, true);
+      const a = P(len, -0.8), b = P(len + 0.8, 0), e = P(len, 0.8);
+      g.fillStyle(0xff6a44, 0.8).fillTriangle(a.x, a.y, b.x, b.y, e.x, e.y);
+    });
+    if (!g) return;
+    const st = { k: 0 };
+    this.tweens.add({
+      targets: st, k: 1, duration: ms + 600,
+      onUpdate: () => {
+        const t = st.k * (ms + 600);
+        g.setAlpha(t < ms ? 0.6 + 0.4 * Math.sin(t / 70) : 0.9 * (1 - (t - ms) / 600));
+      },
+      onComplete: () => g.destroy(),
+    });
+  }
+
+  /** crally: an alpha rallied its pack. A shockwave ring spreads over the ground and a pitched roar sounds. */
+  private cueRally(m: any) {
+    const s = this.cueSprite(m.id);
+    if (!s) return;
+    const g = this.teleStart(s.getData("gvx") ?? s.x, (s.getData("gvy") ?? s.y) - 2, (g) => {
+      g.lineStyle(4, 0xff2e2e, 0.9).strokeEllipse(0, 0, 90, 45);
+      g.lineStyle(2, 0xffd24a, 0.9).strokeEllipse(0, 0, 70, 35);
+    });
+    if (g) {
+      g.setBlendMode(Phaser.BlendModes.ADD).setScale(0.3);
+      this.tweens.add({ targets: g, scale: 3, alpha: 0, duration: 650, ease: "Quad.easeOut", onComplete: () => g.destroy() });
+    }
+    if (this.hear(s, 24)) this.audio.rally();
+  }
+
+  /** cpanic: the alpha fell. A yellow "?" over each of its pack we can see (at most a dozen). */
+  private cuePanic(m: any) {
+    if (!Array.isArray(m.ids)) return;
+    let n = 0;
+    for (const id of m.ids) {
+      const s = typeof id === "string" ? this.cueSprite(id) : undefined;
+      if (!s) continue;
+      this.cueFloater(s, "fx-q");
+      if (++n >= 12) break;
+    }
+  }
+
   // Leap layer on top of the gait: anticipation crouch → stretched arc → landing squash
   // with a dust puff, plus a ground shadow that stays put while the body rises. Runs after
   // tickCreatureGait in the same frame, so it multiplies the gait's scale for this frame
@@ -3409,9 +3763,22 @@ class Hearth extends Phaser.Scene {
       tickCreatureGait(this, s, s.getData("ctype"), dt, near, this.me.x, this.me.y,
         this.tileAt(s.getData("cx") ?? 0, s.getData("cy") ?? 0) === T.WATER);
       const lift = this.creatureJumpTick(s, s.getData("ctype"), dt, near, vx, vy);
-      s.x = vx;
-      s.y = vy + (s.getData("gHoverY") || 0) - lift;
+      // windup crouch / lunge / dodge hop: a decaying offset on top of the lerp, never fed back into it
+      const off = s.getData("off");
+      s.x = vx + (off ? off.x : 0);
+      s.y = vy + (s.getData("gHoverY") || 0) - lift + (off ? off.y - off.h : 0);
       s.setDepth(vy);
+      // level badge / alpha glow ride the sprite (baked Images, moved here; nothing redrawn)
+      const bd: Phaser.GameObjects.Image | undefined = s.getData("badge");
+      if (bd) {
+        if (bd.visible !== s.visible) bd.setVisible(s.visible);
+        bd.setPosition(s.x, s.y - s.displayHeight * 0.9 - 3).setDepth(vy + 2);
+        const gl: Phaser.GameObjects.Image | undefined = s.getData("glow");
+        if (gl) {
+          if (gl.visible !== s.visible) gl.setVisible(s.visible);
+          gl.setPosition(vx, vy - 2).setDepth(vy - 0.5).setAlpha(0.5 + 0.2 * Math.sin((s.getData("gClock") ?? 0) * 2.4));
+        }
+      }
     }
     this.folk.tick(dt);
     this.tickMedics();
@@ -3664,6 +4031,8 @@ class Hearth extends Phaser.Scene {
   }
 
   nearKind(kind: string, r = 4) {
+    // stations stand on the surface: in a mine or a shelter the craft menu must not offer them
+    if (this.z !== 0) return false;
     for (const [i, s] of this.structSpr)
       if (
         s.kind === kind &&

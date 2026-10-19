@@ -6,6 +6,16 @@
 > validation, explicit minor-island resource rules, Core lava vents, post-stamp temperature cleanup,
 > regional open-ocean birds, world metrics, and invariant tests remain incomplete.
 
+> **Update: world v5 (`WORLD_VERSION` 5, the `shared/world.js` redesign).** Fixed since the audit above:
+> monolith plazas and lore-note tiles are guaranteed land (`CLEARINGS`; under v4 the Dunes monolith stood in
+> water on the default seed `hearth-1`, and a monolith or note tile was in water on all five other seeds
+> tried), `lava_vent` decor is now placed on the Core (`LAVA_VENTS`, 6 of them), and `waterTemp` and `bergs`
+> are derived after the mountain ground stamp. The world-metrics wish (section 10) is now `tools/worldmap`.
+> Landmark footprints are also enforced server-side now (Go `movement.go` and `modules.go` and the legacy
+> `blocked()` consult `LANDMARK_BLOCK`). Still open: structured `LANDMARKS` masks (section 2), explicit
+> minor-island resource tables (section 4), nearest-source water-temperature priority and its tests (section 7),
+> regional birds (section 8, not re-audited here) and route-timing metrics (section 10).
+
 ## 1. Scope
 
 This guide repairs the current expanded-world first pass without redesigning the map. Preserve the
@@ -92,6 +102,8 @@ Validate every deterministic landmark at startup in development/test:
 
 Throw in tests for invalid static definitions rather than allowing silent bad placement.
 
+Status (v5): the plaza part is done. Every monolith, its lore-note tile (+7,+4), the spawn, the medics and the villages sit in a `CLEARINGS` disc that is forced to land, kept clear of lakes, levelled flat and kept free of nodes and decor; the mountain 3x3 ground stamp stays as a backstop, and `tools/worldmap` prints the monolith, note and mountain-footprint checks. The temple and the Core mountain are protected by `nearPOI`, not by `CLEARINGS`. There is still no start-up validation or test for landmark footprints.
+
 ## 4. Minor-Island Resource Tables
 
 The current generic minor branch gives bushes and stone to every minor-island kind. Replace it with
@@ -127,6 +139,8 @@ Keep these restrictions gameplay-driven:
 Do not add crystal, iron, diamond, starmetal, boulders, or dense renewable supplies to minor
 islands. The long routes should not replace progression on major islands.
 
+Status (v5): not done. `minorPass` still uses the generic noise rule: driftwood isles get trees, and every non-blight minor can get bushes and stones, so ruin, icefloe and sandbar isles are not resource-free (on `hearth-1` the 12 minors carry 344 nodes: 75 trees, 156 bushes, 113 stones). No crystal, boulder or starmetal reaches a minor.
+
 ## 5. Core Decor And Lava Vents
 
 The current generator exits early for `T.BLIGHT`, making its later `lava_vent` branch unreachable.
@@ -150,6 +164,8 @@ For Core vents:
 - If vents are visual-only, exclude them from gameplay collision.
 - If vents define hot-water sources, compute `waterTemp` from shared deterministic source data,
   not from rendered sprite proximity on the client.
+
+Status (v5): fixed. `coreRegion` places `LAVA_VENTS` (6) `lava_vent` decor with seeded noise on the crater's open ground: at least 7 tiles from the dais, at least 4 apart, inside the rim, and outside `nearPOI`, so never under the Core mountain or in the temple clearing. They are decor only (no collision or damage), and `waterTemp` does not read them.
 
 ## 6. Decor Texture Manifest Coverage
 
@@ -184,6 +200,8 @@ Add assertions:
 - Icefloe-adjacent water is freezing if icefloes are intended as cold sources.
 - Every non-water tile has temperature zero.
 - Generation is identical for repeated calls with the same seed.
+
+Status (v5): the stamping bug is fixed. `genWorld` now derives `waterTemp` and `bergs` in a pass after the mountain ground stamp, and only for tiles that are still water, so every non-water entry is 0 (under v4 six Spire mountain-footprint tiles kept freezing metadata on `hearth-1`) and no berg sits on land. Still open: source priority is a fixed order (Spire radius `ISLE_R + 180` first, then Core radius 125), not nearest source; icefloe isles are not cold sources; and the assertions above are not tests (`gameserver/world/world_test.go` only pins the `waterTemp` digest for `hearth-1`).
 
 ## 8. Regional Birds
 
@@ -263,6 +281,8 @@ Fail CI for invariants; record route timing as a report until target tolerances 
 current 6.2 tiles/sec boat speed, target approximately 120-180 seconds for principal major-island
 routes. Measure shoreline-to-shoreline, not center-to-center.
 
+Status (v5): done as `tools/worldmap/` (`render.mjs`, `metrics.mjs`, `png.mjs`) rather than `scripts/world-metrics.mjs`. `node tools/worldmap/render.mjs [seed] [outDir] [--scale=N] [--crop=x,y,size[,name]]... [--metrics-only]` renders an overview, a crop per major island and the Core, and prints and writes `metrics.json`: generation time, land by tile type per region, elevation split, lakes, land pieces and specks, nodes by kind, decor, iceberg and `tileVis` counts, cliffs and ledges, bumps and pits, reachability with +1 and +2 climbing, landable coast, and the monolith, note, spawn, medic, mountain-footprint and temple-piece checks. It only reports; it never fails a run. Not covered: shore-to-shore route timing, temperature tile counts, CI invariants.
+
 ## 11. Acceptance Criteria
 
 - Server and client use identical landmark footprints.
@@ -270,7 +290,7 @@ routes. Measure shoreline-to-shoreline, not center-to-center.
 - Engine placement succeeds only at the activation dais after objective prerequisites.
 - No required route or interaction radius is blocked.
 - Ruin, icefloe, and blight-shard minors have no normal resource nodes.
-- Lava vents can actually generate without invading the temple clearing.
+- Lava vents can actually generate without invading the temple clearing (met in v5: 6 on the Core, outside `nearPOI`).
 - Every decor key emitted by the generator has a matching `ASSET_MANIFEST` entry; snow tiles render
   `ice_crystal_cluster` instead of a missing-texture placeholder.
 - Bird species follow biome/thermal region and recover correctly after interior transitions.

@@ -236,9 +236,12 @@ func TestCreatureContactDamage(t *testing.T) {
 	f.p.LastDamageAt = 0
 
 	c := f.spawnAt("crawler", gx+0.5, gy, false)
-	f.r.tickN = 5 // contact damage runs every fifth tick
 	f.reset()
-	f.r.stepCreature(c, 1, f.now)
+	f.run(c, 2) // commits to its windup; nothing lands yet
+	if f.p.HP != 10 {
+		t.Fatalf("crawler damaged a keeper before its windup ran out: hp %d", f.p.HP)
+	}
+	f.run(c, 1) // the strike
 	if f.p.HP != 9 {
 		t.Fatalf("crawler contact damage left hp %d, want 9", f.p.HP)
 	}
@@ -254,21 +257,29 @@ func TestCreatureContactDamage(t *testing.T) {
 	}
 }
 
-// Contact damage only lands on ticks that are multiples of five.
+// A crawler against a keeper who stands still lands one blow per windup,
+// recovery and cooldown (2 + 1 + 3 ticks): six ticks apart, never faster.
 func TestContactDamageCadence(t *testing.T) {
 	f := newFixture(t)
 	gx, gy := landTile(t, f.r.world, world.TGrass)
 	f.p.X, f.p.Y, f.p.Z = gx, gy, 0
-	f.p.HP = 10
+	f.p.HP = 100
 	c := f.spawnAt("crawler", gx+0.5, gy, false)
-	for _, tn := range []int64{1, 2, 3, 4, 6, 7} {
-		f.r.tickN = tn
-		c.X, c.Y = gx+0.5, gy // hold it in contact range
-		c.Stun = 0
-		f.r.stepCreature(c, 1, f.now)
+	var hits []int
+	for tk := 1; tk <= 24; tk++ {
+		before := f.p.HP
+		f.run(c, 1)
+		if f.p.HP < before {
+			hits = append(hits, tk)
+		}
 	}
-	if f.p.HP != 10 {
-		t.Fatalf("contact damage landed off the 5-tick cadence: hp %d", f.p.HP)
+	if len(hits) != 4 {
+		t.Fatalf("crawler landed %d blows in 24 ticks (at %v), want 4", len(hits), hits)
+	}
+	for i := 1; i < len(hits); i++ {
+		if hits[i]-hits[i-1] != 6 {
+			t.Fatalf("blows landed on ticks %v, want them six ticks apart", hits)
+		}
 	}
 }
 
@@ -280,36 +291,29 @@ func TestBruteWindupThenDamage(t *testing.T) {
 	f.p.HP = 10
 	b := f.spawnAt("brute", gx+0.5, gy, false)
 
-	f.r.tickN = 5
 	f.reset()
-	f.r.stepCreature(b, 1, f.now) // triggers the windup, deals nothing
+	f.run(b, 1) // triggers the windup, deals nothing
 	if f.p.HP != 10 {
 		t.Fatalf("brute damaged during its telegraph windup: hp %d", f.p.HP)
 	}
-	if !b.WindupTriggered {
+	if !b.WindupTriggered || b.AtkState != atkWindup {
 		t.Fatal("brute did not enter its windup with a player 0.5 tiles away")
 	}
-	if b.Windup != 8 {
-		t.Fatalf("brute windup = %d, want 8", b.Windup)
+	if b.AtkTk != 8 {
+		t.Fatalf("brute windup = %d, want 8", b.AtkTk)
 	}
-	if m := f.lastOfType("ctel"); m == nil || m["id"] != b.ID {
+	if m := f.lastOfType("ctel"); m == nil || m["id"] != b.ID || m["tk"] != float64(8) {
 		t.Fatalf("no ctel telegraph broadcast for the brute: %v", m)
 	}
 
-	// spend the windup, then land on a 5-tick boundary
-	for i := 0; i < 8; i++ {
-		f.r.tickN++
-		f.r.stepCreature(b, 1, f.now)
+	// the slam lands on the tick the windup runs out, not before
+	f.run(b, 7)
+	if f.p.HP != 10 {
+		t.Fatalf("brute damaged before its windup ran out: hp %d", f.p.HP)
 	}
-	if b.Windup != 0 {
-		t.Fatalf("brute windup did not run out: %d", b.Windup)
-	}
-	f.r.tickN = 20
-	f.p.HP = 10
-	b.X, b.Y = gx+0.5, gy
-	f.r.stepCreature(b, 1, f.now)
+	f.run(b, 1)
 	if f.p.HP != 8 {
-		t.Fatalf("brute contact damage left hp %d, want 8 (2 damage)", f.p.HP)
+		t.Fatalf("brute slam left hp %d, want 8 (2 damage)", f.p.HP)
 	}
 }
 
@@ -320,9 +324,12 @@ func TestFrostWraithSlow(t *testing.T) {
 	f.p.X, f.p.Y, f.p.Z = gx, gy, 0
 	f.p.HP = 10
 	c := f.spawnAt("frost_wraith", gx+0.5, gy, false)
-	f.r.tickN = 5
 	f.reset()
-	f.r.stepCreature(c, 1, f.now)
+	f.run(c, 1) // darts in and commits to its windup
+	if f.p.HP != 10 {
+		t.Fatalf("frost wraith damaged a keeper before its windup ran out: hp %d", f.p.HP)
+	}
+	f.run(c, 1) // the strike
 	if f.p.HP != 9 {
 		t.Fatalf("frost wraith contact damage left hp %d, want 9", f.p.HP)
 	}
@@ -360,10 +367,13 @@ func TestNoContactDamageOffSurface(t *testing.T) {
 	f.p.X, f.p.Y, f.p.Z = gx, gy, 1
 	f.p.HP = 10
 	c := f.spawnAt("crawler", gx+0.5, gy, false)
-	f.r.tickN = 5
-	f.r.stepCreature(c, 1, f.now)
+	f.reset()
+	f.run(c, 12)
 	if f.p.HP != 10 {
 		t.Fatalf("a creature reached a player underground: hp %d", f.p.HP)
+	}
+	if f.lastOfType("catk") != nil {
+		t.Fatal("a creature wound up a blow at a player underground")
 	}
 }
 

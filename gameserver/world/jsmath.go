@@ -87,6 +87,43 @@ func jsHypot(vals ...float64) float64 {
 	return math.Sqrt(sum) * max
 }
 
+// jsHypot2 is jsHypot(x, y) without the variadic slice: the same V8
+// algorithm, step for step, for the generator's hot loops (it is called a few
+// million times per world and the slice would be a heap allocation each time).
+func jsHypot2(x, y float64) float64 {
+	if math.IsNaN(x) || math.IsNaN(y) {
+		if math.IsInf(x, 0) || math.IsInf(y, 0) {
+			return math.Inf(1)
+		}
+		return math.NaN()
+	}
+	a, b := math.Abs(x), math.Abs(y)
+	max := 0.0
+	if a > max {
+		max = a
+	}
+	if b > max {
+		max = b
+	}
+	if math.IsInf(max, 1) {
+		return math.Inf(1)
+	}
+	if max == 0 {
+		return 0
+	}
+	sum, compensation := 0.0, 0.0
+	n := a / max
+	summand := float64(n*n) - compensation
+	preliminary := sum + summand
+	compensation = float64(preliminary-sum) - summand
+	sum = preliminary
+	n = b / max
+	summand = float64(n*n) - compensation
+	preliminary = sum + summand
+	sum = preliminary
+	return math.Sqrt(sum) * max
+}
+
 // jsRound mirrors Math.round (round half toward +Infinity).
 func jsRound(x float64) float64 {
 	return math.Floor(x + 0.5)

@@ -115,7 +115,7 @@ func (r *Room) handleGather(p *Player, m map[string]any) {
 
 	if kind == int(world.NodeTree) {
 		r.addHarm(p, x, y, harmTree)
-		if r.chopEcosystem(int(x), int(y)) {
+		if r.chopEcosystem(int(x), int(y), now) {
 			r.addHarm(p, x, y, harmBlight)
 		}
 	}
@@ -163,17 +163,22 @@ func (r *Room) clearBuiltOverNodes() {
 
 // chopEcosystem is the legacy tree reaction: every 8th tree felled in a 16x16
 // sector turns a few grass tiles to mud. It reports whether any ground turned.
-func (r *Room) chopEcosystem(x, y int) bool {
-	sk := ((x >> 4) << 8) | (y >> 4)
+// The pressure starts over once the ground sours, so the land can work it back
+// down while it rests (ecology.go) without a single felling re-souring it; and
+// ground under a building never sours, since it could never heal.
+func (r *Room) chopEcosystem(x, y int, now int64) bool {
+	sk := sectorOf(x, y)
+	r.sectorChopAt[sk] = now
 	r.sectorChops[sk]++
-	if r.sectorChops[sk]%8 != 0 {
+	if r.sectorChops[sk] < ecoSourAt {
 		return false
 	}
+	delete(r.sectorChops, sk)
 	var newMud []int
 	bx, by := (x>>4)<<4, (y>>4)<<4
 	for n := 0; n < 40 && len(newMud) < 14; n++ {
 		mi := ti(float64(bx)+rand.Float64()*16, float64(by)+rand.Float64()*16)
-		if r.tileAt(mi) == world.TGrass && !r.mudTiles[mi] {
+		if r.tileAt(mi) == world.TGrass && !r.mudTiles[mi] && !r.tileBuiltOn(mi) {
 			if _, isNode := r.world.Nodes[mi]; !isNode {
 				r.mudTiles[mi] = true
 				newMud = append(newMud, mi)
@@ -226,7 +231,9 @@ func (r *Room) handleBuild(p *Player, m map[string]any) {
 		return
 	}
 	x, y := float64(i%world.SIZE), float64(i/world.SIZE)
-	if math.Hypot(x-p.X, y-p.Y) > 6 {
+	// structures go on the surface, built from the surface: never through the
+	// floor of a mine or a shelter
+	if p.Z != 0 || math.Hypot(x-p.X, y-p.Y) > 6 {
 		return
 	}
 	if existing, occupied := r.structures[i]; occupied {
@@ -417,7 +424,7 @@ func (r *Room) handlePlant(p *Player, m map[string]any) {
 		return
 	}
 	x, y := float64(i%world.SIZE), float64(i/world.SIZE)
-	if math.Hypot(x-p.X, y-p.Y) > 2.5 {
+	if p.Z != 0 || math.Hypot(x-p.X, y-p.Y) > 2.5 { // farm plots are on the surface
 		return
 	}
 	if !canAfford(p.Inv, cropDef.SeedCost) {
@@ -455,7 +462,7 @@ func (r *Room) handleHarvest(p *Player, m map[string]any) {
 		return
 	}
 	x, y := float64(i%world.SIZE), float64(i/world.SIZE)
-	if math.Hypot(x-p.X, y-p.Y) > 2.5 {
+	if p.Z != 0 || math.Hypot(x-p.X, y-p.Y) > 2.5 { // farm plots are on the surface
 		return
 	}
 	// Deterministic order so the harvest message is stable; the JS version
@@ -864,15 +871,29 @@ func (r *Room) handleAtk(p *Player, m map[string]any) {
 			bd, bestC, bestA, bid = d, nil, a, a.ID
 		}
 	}
+	if dx, dy := clampDir(m, "dx"), clampDir(m, "dy"); dx != 0 || dy != 0 {
+		h := math.Hypot(dx, dy)
+		p.FaceX, p.FaceY = dx/h, dy/h // a swing faces the keeper where it struck
+	}
+	// a nimble creature may sidestep the swing (creature_elite.go): a miss
+	dodgeAng, dodged := 0.0, false
+	if bestC != nil {
+		dodgeAng, dodged = r.tryDodge(p, bestC)
+	}
 	// targetI carries the struck creature/animal id, or null on a miss.
 	var targetI any
-	if bid != "" {
+	if bid != "" && !dodged {
 		targetI = bid
 	}
 	r.broadcast(map[string]any{
 		"t": "act", "id": p.S.ID, "seq": seq, "a": atkClip, "tool": nullable(p.Equip),
 		"dx": clampDir(m, "dx"), "dy": clampDir(m, "dy"), "targetI": targetI,
 	})
+	if dodged {
+		// the swing whiffed: nothing else is struck, not even a structure
+		r.broadcast(map[string]any{"t": "cdodge", "id": bestC.ID, "ang": dodgeAng, "by": p.S.ID, "seq": seq})
+		return
+	}
 
 	if bestA != nil {
 		r.hitAnimal(p, bestA, dmg, seq)
@@ -884,9 +905,14 @@ func (r *Room) handleAtk(p *Player, m map[string]any) {
 	}
 
 	// no creature in range: strike a structure to demolish it (half the
-	// materials are refunded)
+	// materials are refunded). The World Engine is never a candidate: only the
+	// Blight may bring it down, so keepers defending it can swing freely beside
+	// it (and a demolition refund would have paid for a fresh one).
 	bsi, bsd := -1, 2.4
-	for si := range r.structures {
+	for si, ss := range r.structures {
+		if ss.Kind == "engine" {
+			continue
+		}
 		d := math.Hypot(float64(si%world.SIZE)-p.X, float64(si/world.SIZE)-p.Y)
 		if d < bsd {
 			bsd = d
@@ -934,11 +960,6 @@ func (r *Room) handleAtk(p *Player, m map[string]any) {
 		msg += " — recovered " + strings.Join(back, ", ")
 	}
 	r.send(p, map[string]any{"t": "msg", "s": msg})
-	if r.wave != nil && bsi == r.wave.engineI {
-		r.wave = nil
-		r.broadcast(map[string]any{"t": "wave", "secs": 0})
-		r.broadcast(map[string]any{"t": "msg", "s": "You destroyed your own World Engine!"})
-	}
 }
 
 // destroyStructure removes a structure and any crop growing on it. The legacy

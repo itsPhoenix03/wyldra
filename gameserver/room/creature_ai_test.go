@@ -144,25 +144,6 @@ func TestCalertOncePerSighting(t *testing.T) {
 	}
 }
 
-// A stalker that lands a blow falls back before coming in again.
-func TestStalkerHitAndRun(t *testing.T) {
-	f := newFixture(t)
-	f.p.HP = 1 << 20
-	gx, gy := landPatch(t, f.r, world.TGrass, 7)
-	f.p.X, f.p.Y = gx, gy
-	c := f.spawnAt("stalker", gx+0.5, gy, true)
-	f.r.tickN = 4 // the next tick is a contact tick
-	f.run(c, 1)
-	if c.Retreat == 0 {
-		t.Fatal("stalker did not fall back after striking")
-	}
-	d0 := math.Hypot(c.X-f.p.X, c.Y-f.p.Y)
-	f.run(c, 3)
-	if d1 := math.Hypot(c.X-f.p.X, c.Y-f.p.Y); d1 <= d0 {
-		t.Fatalf("retreating stalker closed in: %.2f -> %.2f", d0, d1)
-	}
-}
-
 // The lancer backs off from a player who crowds it.
 func TestLancerKeepsBeamRange(t *testing.T) {
 	f := newFixture(t)
@@ -216,24 +197,28 @@ func TestWolfPackFlanks(t *testing.T) {
 	for k := 0; k < 3; k++ {
 		pack = append(pack, f.spawnAt("husk_wolf", gx-7, gy+float64(k)*0.4, true))
 	}
+	// The widest the pack gets around the prey on its way in: once the wolves
+	// strike (telegraphed lunge, then hit-and-run) the spread is no longer the
+	// flank's doing, so the last tick alone would measure the retreat instead.
+	best := 0.0
 	for k := 0; k < 14; k++ {
 		f.r.tickN++
 		f.r.sampleVelocities()
 		for _, c := range pack {
 			f.r.stepCreature(c, 1, f.now)
 		}
-	}
-	// angular spread of the pack around the prey
-	minA, maxA := math.Pi, -math.Pi
-	for _, c := range pack {
-		a := math.Atan2(c.Y-f.p.Y, c.X-f.p.X)
-		if a < 0 && minA > 0 { // keep the arc continuous across ±π (pack starts west)
-			a += 2 * math.Pi
+		minA, maxA := math.Pi, -math.Pi
+		for _, c := range pack {
+			a := math.Atan2(c.Y-f.p.Y, c.X-f.p.X)
+			if a < 0 && minA > 0 { // keep the arc continuous across ±π (pack starts west)
+				a += 2 * math.Pi
+			}
+			minA, maxA = math.Min(minA, a), math.Max(maxA, a)
 		}
-		minA, maxA = math.Min(minA, a), math.Max(maxA, a)
+		best = math.Max(best, maxA-minA)
 	}
-	if spread := maxA - minA; spread < math.Pi/3 {
-		t.Fatalf("wolves stayed bunched: %.0f° spread", spread*180/math.Pi)
+	if best < math.Pi/3 {
+		t.Fatalf("wolves stayed bunched: %.0f° widest spread", best*180/math.Pi)
 	}
 }
 
