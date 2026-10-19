@@ -769,7 +769,8 @@ func (r *Room) restore(p *Player, prof *persist.Profile) {
 	}
 	p.Hunger, p.Thirst = prof.Hunger, prof.Thirst
 	// Never restore a player into water, and never onto a tile outside the
-	// world: both would strand them.
+	// world: both would strand them. persist.NoPos (a migrated save) lands in the
+	// second case, so that keeper keeps the spawn newPlayer gave them.
 	if prof.X >= 0 && prof.Y >= 0 && prof.X < world.SIZE && prof.Y < world.SIZE &&
 		r.world.Tiles[ti(prof.X, prof.Y)] != world.TWater {
 		p.X, p.Y = prof.X, prof.Y
@@ -788,11 +789,19 @@ func (r *Room) loadSave() error {
 	if err != nil || snap == nil {
 		return err
 	}
-	if snap.Version != world.WorldVersion || snap.Seed != r.cfg.Seed {
+	// A different seed is a different world, and a save from a newer build (or
+	// with no version at all) holds state this one cannot read: all start fresh.
+	// An OLDER version on the same seed is a map change, which keeps the players
+	// (see migrateSave).
+	if snap.Seed != r.cfg.Seed || snap.Version < 1 || snap.Version > world.WorldVersion {
 		r.cfg.Logger.Printf("[hearth] save version/seed mismatch — starting fresh")
 		return nil
 	}
 	r.day, r.time, r.won, r.mono = snap.Day, snap.Time, snap.Won, snap.Mono
+	if snap.Version < world.WorldVersion {
+		r.migrateSave(snap)
+		return nil
+	}
 	for k, v := range snap.Profiles {
 		r.profiles[k] = v
 	}
@@ -880,6 +889,43 @@ func (r *Room) loadSave() error {
 	r.cfg.Logger.Printf("[hearth] save loaded: day %d, %d structures, %d modules, %d digs, %d farms, %d profiles",
 		r.day, len(r.structures), len(r.modules), len(r.digs), len(r.farms), len(r.profiles))
 	return nil
+}
+
+// migrateSave is loadSave's path for a save from an older map: same seed, lower
+// WorldVersion. The terrain was reshaped since it was written, so every tile
+// index in it (nodes, structures, digs, farms, chests, modules...) points at the
+// wrong ground, and none of it is loaded. The people survive: profiles, the
+// monolith and win state and the clock were already taken by the caller, and
+// each profile loses its position and layer so its keeper rejoins at the normal
+// spawn instead of wherever the old coordinates now land (or inside a mine that
+// is gone). Beds and campfires were structures, so respawn points reset with
+// them. The next save writes the current WorldVersion, so this runs once, and
+// before it can overwrite the old world a store that can (persist.Archiver) sets
+// the old save aside as a backup; a failed backup is logged, not fatal.
+func (r *Room) migrateSave(snap *persist.Snapshot) {
+	backup := ""
+	if a, ok := r.cfg.Store.(persist.Archiver); ok {
+		switch path, created, err := a.Archive(snap.Version); {
+		case err != nil:
+			backup = fmt.Sprintf("; BACKUP FAILED: %v", err)
+		case created:
+			backup = "; old save backed up to " + path
+		case path != "":
+			backup = "; old save already backed up at " + path
+		}
+	}
+	kept := 0
+	for k, v := range snap.Profiles {
+		if v == nil {
+			continue
+		}
+		prof := *v
+		prof.X, prof.Y, prof.Z = persist.NoPos, persist.NoPos, 0
+		r.profiles[k] = &prof
+		kept++
+	}
+	r.cfg.Logger.Printf("[hearth] world v%d -> v%d: map changed — kept %d player profiles, reset the world%s",
+		snap.Version, world.WorldVersion, kept, backup)
 }
 
 // inWorld guards every persisted tile index. A corrupt or hand-edited save must

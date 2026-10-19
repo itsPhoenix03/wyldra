@@ -121,7 +121,7 @@ save dir (`HEARTH_SAVE_DIR`) and spare ports rather than deleting
 ## 4. Shipped and working
 
 ### The game
-Deterministic 1280×1280 worldgen (4 major islands + Core + minor isles, `WORLD_VERSION = 4`);
+Deterministic 1280×1280 worldgen (4 major islands + Core + minor isles, `WORLD_VERSION = 5`);
 three z-layers; survival loop with hunger, thirst, thermal damage, weather and day/night;
 gathering, crafting, building, digging, farming, chests, boats, swimming; 9 creature types and
 7 animal species; wisp infection; two medic NPCs with a full bargain state machine; progression
@@ -146,7 +146,10 @@ mineshaft/shelter within 3.0 tiles of **both** endpoints, throttled `{t:'fix'}` 
 ### Multi-world hosting
 `gameserver/hosting` routes on the verified ticket (`wrong-instance` / `unknown-world` /
 `world-unavailable`). Rooms are lazy by default, `HEARTH_EAGER_WORLDS=1` flips it. Per-world
-save files. Cross-world isolation asserted directly; `-race` clean.
+save files. Cross-world isolation asserted directly; `-race` clean. A save from an older
+`WORLD_VERSION` on the same seed keeps its players (profiles, monoliths, `won`, clock) and resets
+the world, with keepers respawning at spawn; a different seed or newer version starts fresh
+(docs/10 §8.5, both servers). Bumping `WORLD_VERSION` is therefore all a map change needs.
 
 ### Room admission
 **4 players per room** (`room.DefaultMaxPlayers`, configurable per world via `maxPlayers` or
@@ -229,6 +232,29 @@ shed pressure and their mud turns back to grass (12% per 30 s pass per tile), an
 reclaims the nearest soured tile. Nothing heals or regrows through a building, farm, module or
 blight; healed tiles go out as `regrow`. Creatures walk over farm plots instead of gnawing them
 (that bug destroyed crops). The client hides world decor under built tiles.
+
+### World map v5: reshaped islands
+`WORLD_VERSION` 5 (`shared/world.js`): every major island is one designed landmass instead of a
+noise-jittered disc, shaped per biome by its `ISLE_PLANS` entry. Woods: lobed coast, two bays, a
+peninsula, a lake, rolling hills with forested L3 tops and two rock outcrops. Dunes: beaches, sand
+spits, crescent (barchan) dunes, flat pans, up to 8 placed rocks (tables, buttes, outcrops), an oasis. Spire: fjords, plateau, high massif, glaciers,
+tarns. Marsh: low and flat, pools, meandering channels, hummocks. Core: an irregular crater with an
+ash rim and six `lava_vent`s. Minors: one landmass each. `SIZE`, island centres and the minor isles
+are unchanged. Nodes and decor are placed by quota and score (`NODE_QUOTAS`, `DECOR_QUOTA`), not noise
+thresholds. Guarantees: monolith plazas, lore-note tiles, spawn, medics and villages sit in
+`CLEARINGS` (always land, levelled, node-free); no land specks under 12 tiles; every land tile
+climbable with +1 from the shore; no walled pockets, one-tile pillars or thin sea tongues; no straight
+cliff run over 6 or drawn ledge run over 8, no lone ledge dashes; rocks spaced (`placeRocks`: no 2x2 blocks, no rows of 3).
+`waterTemp` / `bergs` are derived after the mountain stamp.
+
+**Look at a generator change** with `node tools/worldmap/render.mjs [seed] [outDir] [--scale=N]
+[--crop=x,y,size[,name]]... [--metrics-only]`: an overview and per-island PNG crops, plus metrics (land,
+elevation split, lakes, land pieces, nodes per kind, cliffs / ledges, bumps / pits, reachability,
+landable coast, monolith / note checks). **Any generator change** bumps `WORLD_VERSION`, must keep
+`gameserver/world/` bit-exact (`node tools/worldparity/compare.mjs` / `npm run test:parity`) and
+re-pins the digests in `gameserver/world/world_test.go`. **Saves**: a same-seed save from an older
+version keeps its players and resets the world, after copying the old file to `<save>.v<old>.bak`
+(Multi-world hosting above, docs/10 §8.5). Detail: `docs/MAP_EXPANSION_GUIDE.md`, "World Generator (v5)".
 
 ### Title screen: the Whispering Woods
 `index.html` (`#menu`) is laid out like a game title screen: the logo and a vertical menu on the
@@ -356,6 +382,7 @@ player's and enemy's attack radius and heading (`src/devOverlay.ts`; radii mirro
 | All art | `assets/sprites/**` (SVG only) |
 | Dev stack launcher | `tools/dev/stack.mjs` |
 | Worldgen parity harness | `tools/worldparity/` |
+| World map renderer / metrics | `tools/worldmap/` |
 | Defs generator | `tools/defs/gen-defs.mjs` |
 | Test suites | `gameserver/test-go.mjs`, `gameserver/test-multiworld.mjs`, `control/test.mjs`, `test.mjs` (legacy) |
 | Deep technical reference | `AGENT_GUIDE.html` |

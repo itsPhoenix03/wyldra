@@ -1,6 +1,6 @@
 ﻿// Wyldra — authoritative co-op survival server.
 import { WebSocketServer } from 'ws';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, copyFileSync, constants as fsConstants } from 'fs';
 import { genWorld, findSpawn, findMedicSpawns, medicBlockTiles, nearestLand, SIZE, T, MONOLITHS, CORE, DIGGABLE, WORLD_VERSION, ACTIVATION_I, ISLES, LANDMARK_BLOCK } from '../shared/world.js';
 import { NODE_DEF, RECIPES, STRUCT_HP, WOODEN, NAMES, canAfford, pay, emptyInv, DECOR_NONBLOCKING, CROPS, MAX_HP, MEDICINE_HEAL, MEDIC_TRADE_POOLS } from '../shared/defs.js';
 import { TICK_MS, DAY_LENGTH_SEC, isNightTime } from '../shared/time.js';
@@ -61,9 +61,26 @@ function loadSave() {
   if (!existsSync(SAVE_PATH)) return;
   try {
     const s = JSON.parse(readFileSync(SAVE_PATH, 'utf8'));
-    if (s.version !== WORLD_VERSION || s.seed !== SEED) return console.log('[hearth] save.json version/seed mismatch — starting fresh');
+    // A different seed is a different world, and a save from a newer build holds state this one cannot
+    // read: both start fresh. An OLDER version on the same seed is a map change, which keeps the players.
+    if (!Number.isInteger(s.version) || s.version < 1 || s.version > WORLD_VERSION || s.seed !== SEED)
+      return console.log('[hearth] save.json version/seed mismatch — starting fresh');
     day = s.day; time = s.time; won = s.won;
     s.mono.forEach((v, i) => (mono[i] = v));
+    if (s.version < WORLD_VERSION) {
+      // The terrain was reshaped, so every tile index in the save (nodes, structures, digs, farms, chests...)
+      // points at the wrong ground and none of it is loaded. Profiles survive minus their position (x/y -1 is
+      // outside the world, so the join code leaves that keeper at the normal spawn). Beds and campfires were
+      // structures, so respawn points reset with them. The next save writes WORLD_VERSION: this runs once, and
+      // before it can overwrite the old world the file is copied beside itself — once: a crash and rerun must not
+      // replace the pristine backup (COPYFILE_EXCL refuses to overwrite). A failed backup is logged, not fatal.
+      const bak = `${SAVE_PATH}.v${s.version}.bak`;
+      let backup;
+      try { copyFileSync(SAVE_PATH, bak, fsConstants.COPYFILE_EXCL); backup = `; old save backed up to ${bak}`; }
+      catch (e) { backup = e.code === 'EEXIST' ? `; old save already backed up at ${bak}` : `; BACKUP FAILED: ${e.message}`; }
+      for (const [tok, prof] of Object.entries(s.profiles || {})) if (prof) profiles[tok] = { ...prof, x: -1, y: -1 };
+      return console.log(`[hearth] world v${s.version} -> v${WORLD_VERSION}: map changed — kept ${Object.keys(profiles).length} player profiles, reset the world${backup}`);
+    }
     for (const [i, rem] of s.removed) removed.set(i, Date.now() + rem);
     s.mud.forEach((i) => mudTiles.add(i));
     Object.assign(sectorChops, s.sectorChops || {});
@@ -239,7 +256,8 @@ wss.on('connection', (ws) => {
         prof.tools.forEach((t) => p.tools.add(t));
         prof.gear.forEach((g) => p.gear.add(g));
         p.hp = prof.hp; p.hunger = prof.hunger; p.thirst = prof.thirst;
-        if (world.tiles[ti(prof.x, prof.y)] !== T.WATER) { p.x = prof.x; p.y = prof.y; warped(p); }
+        // never restore into water or outside the world (a migrated save stores x/y -1: keep the spawn)
+        if (prof.x >= 0 && prof.y >= 0 && prof.x < SIZE && prof.y < SIZE && world.tiles[ti(prof.x, prof.y)] !== T.WATER) { p.x = prof.x; p.y = prof.y; warped(p); }
         p.wornGear = prof.wornGear && p.gear.has(prof.wornGear) ? prof.wornGear : null;
         if (prof.name && helloName === 'Keeper') p.name = prof.name;
       }

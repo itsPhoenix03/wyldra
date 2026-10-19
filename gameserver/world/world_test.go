@@ -3,6 +3,7 @@ package world
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,20 +16,20 @@ import (
 //
 // Re-derive with:  node tools/worldparity/compare.mjs
 var hearth1 = map[string]string{
-	"tiles":     "c44825ef4dfb25b0392a753d2d9d4d263253daa2552a52ce293c87d9defe653c",
-	"elev":      "59eb3018a951eb885aff9e545ec93587b688819498191799b7ee92c9c5b2c465",
+	"tiles":     "2e4485b66349b49a667d75711092f74862f9e2bc31bc1dc82bfd763b999b305f",
+	"elev":      "c3c9026a3d93a36a319c2ffe2891088aadea92760ae55c6bd92a743321602a6c",
 	"veins":     "de376adc851095ed23e40aae7fb76a8458f243551e8717eb7a648186679161c1",
-	"waterTemp": "85cbb461a6f158920877931d55368f7ee06ac13485be5a52cf93aa006a2254e1",
-	"tileVis":   "a6deecd9781c9de109d51d430327636bfd4ba20f599a3ebdaa4403982ccf1117",
-	"nodes":     "35712e5c72dadff3558933c4b938d4ee9a8586ad85bc3ab4cbb8d47e71583404",
-	"bergs":     "6ee3cd711442bc4115d9b41d370816dd632d1a7144b0ba438168a6451da5217d",
-	"decor":     "b4042a0cf976675f215398fb6ce4f264d3000f5e6978d4f74d1813eee2c1c805",
+	"waterTemp": "00432e309b72cac108471b9b1a97a8f7408032875fafd45c2170a25ef906cd7d",
+	"tileVis":   "1a9f83daa2edf16edf31edc91cb86ab98d6230b3184b247df3d5fdd14e95af83",
+	"nodes":     "98d9bd3d4d9b0fc6683149d6b04768fc9d8b52322bd9363efe080a5f9a2aeba1",
+	"bergs":     "4ad66ba13b3409ab76e0d5ce0dcfa169509adbb7fb38fae6ffcee90fcde70c8d",
+	"decor":     "badfe9ac1d48857f65e2ca95ba65cc895ad313d9fe2bfdacb358409b41c7f331",
 }
 
 const (
-	hearth1Nodes = 3947
-	hearth1Bergs = 1044
-	hearth1Decor = 165
+	hearth1Nodes = 4102
+	hearth1Bergs = 1043
+	hearth1Decor = 171
 )
 
 func sha(b []byte) string {
@@ -139,5 +140,56 @@ func TestToInt32IsTruncationNotFloor(t *testing.T) {
 	}
 	if got := toInt32(4294967296 + 5); got != 5 {
 		t.Errorf("toInt32(2^32+5) = %v, want 5", got)
+	}
+}
+
+// TestJSHypot2MatchesJSHypot: the generator's two-argument hypot must be the
+// variadic V8 port bit for bit, including signed zeros and wild magnitudes.
+func TestJSHypot2MatchesJSHypot(t *testing.T) {
+	a := NewAlea("hypot")
+	vals := []float64{0, math.Copysign(0, -1), 1, -1, 3, 4, 1e-300, 1e300, 0.1, 7.5}
+	for i := 0; i < 20000; i++ {
+		vals = append(vals, (a.Next()-0.5)*math.Pow(10, float64(int(a.Next()*12)-6)))
+	}
+	for i := 0; i < len(vals); i++ {
+		x, y := vals[i], vals[(i*7+3)%len(vals)]
+		if g, w := jsHypot2(x, y), jsHypot(x, y); math.Float64bits(g) != math.Float64bits(w) {
+			t.Fatalf("jsHypot2(%v, %v) = %v, jsHypot = %v", x, y, g, w)
+		}
+	}
+}
+
+// TestClearingsMirrorFolkFires: the village clearings are levelled where
+// folk.go seeks each village fire — the two must move together.
+func TestClearingsMirrorFolkFires(t *testing.T) {
+	for _, v := range folkVillageDefs {
+		k := -1
+		for i, m := range MajorIslands {
+			if m.ID == v.island {
+				k = i
+			}
+		}
+		want := [2]int{ISLES[k][0] + v.off[0], ISLES[k][1] + v.off[1]}
+		found := false
+		for _, c := range Clearings {
+			if c.ID == v.island+"-village" {
+				found = true
+				if c.K != k || [2]int{c.X, c.Y} != want {
+					t.Errorf("%s: clearing at %v (island %d), folk fire sought at %v (island %d)", c.ID, [2]int{c.X, c.Y}, c.K, want, k)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("no %s-village clearing", v.island)
+		}
+	}
+}
+
+// BenchmarkGenWorld times one full world:
+//
+//	go test -run '^$' -bench GenWorld -benchtime 5x ./world
+func BenchmarkGenWorld(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		GenWorld("hearth-1")
 	}
 }

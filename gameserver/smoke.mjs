@@ -17,7 +17,7 @@
 // Exit code 0 means every assertion passed.
 
 import WebSocket from 'ws';
-import { genWorld, findSpawn, SIZE, WORLD_VERSION } from '../shared/world.js';
+import { genWorld, findSpawn, SIZE, T, WORLD_VERSION } from '../shared/world.js';
 
 const CONTROL = process.env.HEARTH_CONTROL_URL || 'http://localhost:8090';
 const SEED = process.env.HEARTH_SEED || 'hearth-1';
@@ -180,7 +180,9 @@ async function main() {
 
   // --- 4. the actual proof: decoded terrain === genWorld('hearth-1') -------
   console.log('\n[smoke] decoding chunks and comparing against shared/world.js');
-  const LAYERS = [['tiles', world.tiles], ['elev', world.elev], ['veins', world.veins],
+  // veins is masked to land on the wire (docs/10_GO_WIRE_PROTOCOL.md): 0 over water
+  const wireVeins = world.veins.map((v, i) => (world.tiles[i] === T.WATER ? 0 : v));
+  const LAYERS = [['tiles', world.tiles], ['elev', world.elev], ['veins', wireVeins],
                   ['waterTemp', world.waterTemp], ['tileVis', world.tileVis]];
   let sampled = 0, mismatches = 0;
   let totalB64 = 0;
