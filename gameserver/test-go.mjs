@@ -1550,11 +1550,14 @@ console.log(`DEVOK spawn OK: all ${CRE_TYPE_KEYS.length} creature types spawned 
 
   // bridges: the one piece allowed over water, and only moored to land (§12.5)
   const coast = (() => {
-    for (let i = 0; i < world.tiles.length; i++) {
+    for (let i = SIZE; i < world.tiles.length - SIZE; i++) {
       const x = i % SIZE;
       if (x < 2 || x >= SIZE - 2) continue;
       if (world.tiles[i] !== T.WATER) continue;
       if (world.tiles[i - 1] === T.WATER || world.tiles[i + 1] !== T.WATER) continue;
+      // the far tile needs open water on its other three sides, so its only mooring is i
+      const far = i + 1;
+      if (world.tiles[far + 1] !== T.WATER || world.tiles[far - SIZE] !== T.WATER || world.tiles[far + SIZE] !== T.WATER) continue;
       return [i, i + 1];                       // land at i-1, open water at i+1
     }
     return null;

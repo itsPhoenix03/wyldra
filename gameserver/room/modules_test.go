@@ -354,19 +354,25 @@ func TestCascadeTakesDownWhatItHeldUp(t *testing.T) {
 // --- bridges ---------------------------------------------------------------
 
 // coastTile finds a water tile with land on one side, plus the water tile
-// directly beyond it, which is the shape every bridge test needs.
+// directly beyond it, which is the shape every bridge test needs. The far tile
+// must have open water on its three other sides, so the near segment is its
+// only possible mooring (a ragged coast often has land diagonally beyond).
 func coastTile(t *testing.T, f *fixture) (int, int) {
 	t.Helper()
-	for i := 0; i < world.SIZE*world.SIZE; i++ {
-		if f.r.world.Tiles[i] != world.TWater {
+	tiles := f.r.world.Tiles
+	for i := world.SIZE; i < world.SIZE*(world.SIZE-1); i++ {
+		if tiles[i] != world.TWater {
 			continue
 		}
 		x := i % world.SIZE
 		if x < 2 || x >= world.SIZE-2 {
 			continue
 		}
-		if f.r.world.Tiles[i-1] == world.TWater || f.r.world.Tiles[i+1] != world.TWater {
+		if tiles[i-1] == world.TWater || tiles[i+1] != world.TWater {
 			continue // want land at i-1 and open water at i+1
+		}
+		if far := i + 1; tiles[far+1] != world.TWater || tiles[far-world.SIZE] != world.TWater || tiles[far+world.SIZE] != world.TWater {
+			continue // the far tile would moor to land of its own
 		}
 		return i, i + 1
 	}

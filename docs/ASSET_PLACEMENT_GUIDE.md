@@ -42,11 +42,11 @@ Do not put decorative props in `world.nodes` merely to make them appear. Every e
 - Natural world assets belong in `shared/world.js` placement rules. Player-built/crafted assets belong in `shared/defs.js` recipes and server-validated `build` flows.
 - Inventory and crafting icons belong in `src/ui.ts`. World sprites must be preloaded and mapped in `src/main.ts`.
 - Any server-visible resource, recipe, structure, node, or crafting cost must be validated by `server/index.js`, not only the client.
-- If an asset changes world generation, stale saves can place structures/nodes on invalid terrain. Bump seed or delete `server/save.json` during testing.
+- If an asset changes world generation, stale saves can place structures/nodes on invalid terrain. Bump `WORLD_VERSION`: a same-seed older save keeps its players and resets the world (`docs/10_GO_WIRE_PROTOCOL.md` section 8.5), and the Go port and its parity digests must change with it (`MAP_EXPANSION_GUIDE.md`, "Changing The Generator").
 - World generation must use seeded noise or an `alea(seed + purpose)` stream. Never use `Math.random()` in deterministic placement.
 - Preserve the current index invariant: `NODE_KEYS[NODE.X]` and `NODE_DEF[NODE.X]` must describe the same node. Append new numeric node kinds; do not reorder existing values in a save-compatible world.
 - Keep gameplay terrain and visual variants separate. `T`, `TILE_KEYS`, server biome checks, environmental damage, mining, wildlife, and client rendering currently share numeric tile semantics.
-- Keep placement clear of monoliths, Core, spawn, notes, and structure footprints. Reuse or expand `nearPOI()` instead of relying on low random density.
+- Keep placement clear of monoliths, Core, spawn, notes, and structure footprints. Reuse or expand `nearPOI()` instead of relying on low random density; the `free` radius of each `CLEARINGS` entry (monolith plazas, note tiles, villages, spawn, medics) also keeps nodes and decor out.
 
 ## Biome Asset Groups
 
@@ -394,6 +394,23 @@ Current node contract:
 - `NODE_SPR` in `src/main.ts` maps that render key to a texture and explicit rasterization size.
 - `removed` and `nodeHp` are server mutations keyed by tile index.
 
+Current natural placement (world v5): major-island nodes are placed by quota and score, not by noise thresholds. The old rule (a node wherever a noise value passed a cutoff, so counts and clumping depended on the seed) survives only on the minor isles (`minorPass`: driftwood trees, scatter-noise bushes and stones; none on blight shards).
+
+- `NODE_QUOTAS[k]` lists `[NODE kind, count, scorer]` for major island `k`. For each entry, `pickTop` takes the `count` highest-scoring open tiles of the island (score descending, then tile index ascending, so every platform picks the same tiles). Entries fill in order, so earlier ones claim tiles first, and a scorer returns `NO` (`-Infinity`) for a tile that is not a candidate. Counts match the quotas on every seed tried (trees lose a few to the spawn-glade thinning below).
+- Rocks (boulder, stone, crystal, starmetal) go through `placeRocks` instead of a straight `pickTop`: the same ranking, but a tile is skipped if it would touch more than one rock side-on, touch a rock that already touches another, or have more than two rocks among its eight neighbours. So no 2x2 blocks and no rows of 3 (no rock touches another side-on more than once), and the quota spills outward onto rims and aprons instead of packing the best spots. Boulders are placed with `spread`: a tile is skipped if any rock at all is among its eight neighbours. A later rock can still bring an earlier one to three rock neighbours (about 4% of rocks).
+- An open tile is island land with no node yet, outside `nearPOI()` (a 5x5 box round each monolith, an 11x11 box round the Core centre, 2 tiles round any mountain or temple-piece tile) and outside the `free` radius of every `CLEARINGS` entry (monolith, note tile, village, spawn, medic).
+- The scorers are the `S` table in `dressIsland`:
+
+| Island | Quota: kind, count, scorer | What the scorer favours |
+|---|---|---|
+| Woods | starmetal 5 `star`; tree 990 `forest`; tree 90 `lone`; bush 305 `edge`; stone 60 `scarp`, 24 `spawnRock`, 110 `hill`, 25 `field` | `star`: peaks of the scatter noise. `forest`: low-frequency stands favouring the L3 hills, a ring of woodland round the spawn glade, small glades punched out, a ragged setback from water, a third of the tiles left open. `lone`: a few trees outside the forest, 3+ tiles from water and 4+ from other trees. `edge`: bushes up to 4 tiles out from the trees and in patches along the lake. Stones: on the rock outcrops, 3-15 tiles round the spawn, on L3 tops, a few in the fields. |
+| Dunes | starmetal 10 `star`; boulder 310 `outcrop`; stone 269 `pebble` | Boulders on the scree aprons round the placed rocks first, then rocky reg flats, then the rock tops; stones favour the aprons and flats. |
+| Spire | crystal 266 `crevasse`; boulder 439 `foot`; stone 253 `scree` | Crystals along crevasse noise on L2-L3; boulders at the foot of cliffs (a higher tile within 2); scree anywhere, a little more on L1. Never starmetal. |
+| Marsh | starmetal 13 `star`; bush 318 `reed`; crystal 272 `bog` | Reed beds on L1 banks round pools and channels, a few on the mudflats by the sea; crystals in bog patches, not on hummocks. |
+| Core | none | |
+
+After the Woods' trees are down, the spawn glade is thinned so no two trees within `GLADE_EDGE` (9) tiles of the spawn touch (`spaceGladeTrees`); the first trees a keeper reaches stand apart.
+
 For a harvestable tree variant, choose one implementation deliberately:
 
 1. New gameplay node kind: append a new `NODE` value, `NODE_KEYS` entry, and `NODE_DEF` entry. Use this when yield, HP, tool, or respawn differs.
@@ -417,6 +434,8 @@ Wildlife does not use `world.nodes`. Add a type to the server's `ANIMAL_TYPES`/s
 ### Decorative Props And Tile Variants
 
 Use a separate deterministic collection for non-interactive props, for example `decor: Map<tileIndex, decorKind>`. Both client and server may generate it, but only the client needs sprites unless a prop blocks movement or can change. Apply biome, adjacency, density, POI-clearance, and minor-island supply rules while generating the collection.
+
+Current decor and `tileVis` placement (world v5): decor is quota-based too, not a noise cutoff. `DECOR_QUOTA = [69, 31, 27, 38]` props per major island (`DECOR_KEYS[k]`: `glow_mushroom` Woods, `sand_ruin_pillar` Dunes, `ice_crystal_cluster` Spire, `bone_totem` Marsh) go on the best-scoring open tiles of that island's own kind of ground, after the nodes and never within 20 tiles of the spawn: the Woods in the forest's shade (forest density above 0.45), the Dunes on L1-L2 out on the pans, the Spire on L2-L3, the Marsh on L1-L2 and nearer the pools. The Core gets `LAVA_VENTS` (6) `lava_vent` props on open crater ground, 7+ tiles from the dais and 4+ apart. `tileVis` is a coherent patch layer, not per-tile noise: flower meadows on the open Woods, cracked pans on the Dunes' flat L1, glaciers on the Spire's L3 and ice shelves along its coast, moss on the Marsh hummocks, ash near the Core's rim, patches on minor isles.
 
 The three extra tile SVGs are visual variants, not automatically new gameplay biomes:
 
@@ -519,7 +538,7 @@ Before adding any asset to world generation:
 5. Is it added to `NAMES`, inventory shape, UI icon map, recipes, and tests if it is a resource?
 6. Is the sprite preloaded before use?
 7. Does it need a collision rule or can players walk through it?
-8. Does adding it to worldgen require a seed bump or save deletion?
+8. Does adding it to worldgen need a `WORLD_VERSION` bump (any generator change does) and a quota in `NODE_QUOTAS` or `DECOR_QUOTA`?
 9. If it is a large mountain/ruin, is its complete footprint authoritative and are required routes still open?
 10. If it is a water visual, does shared semantic data drive both rendering and server damage?
 11. If it is animated SVG art, has it been supplied as static frames compatible with Phaser rasterization?
@@ -541,8 +560,8 @@ Before adding any asset to world generation:
 | `moth` | Yes | No | No | Yes | Blight variant | Night/glow areas. |
 | `sand_ruin_pillar` | No | Yes | No | Ruins only | Rare | Desert ruins. |
 | `bone_totem` | No | Rare | No | Yes | Blight | Marsh tribe or hostile decor. |
-| `glow_mushroom` | Cave | No | Cave | Yes | Cave | Underground/dark areas. |
-| `lava_vent` | No | No | Deep only | No | Yes | Hazard, not decoration spam. |
+| `glow_mushroom` | Cave (surface: forest shade) | No | Cave | Yes | Cave | Underground/dark areas; also the Woods' generated decor (69 in forest shade, `DECOR_QUOTA`). |
+| `lava_vent` | No | No | Deep only | No | Yes | Hazard, not decoration spam. 6 placed on the Core (`LAVA_VENTS`). |
 | `ice_crystal_cluster` | No | No | Yes | Rare | No | Crystal node/decor. |
 | `blight_spore` | Infected | Infected | Infected | Infected | Yes | Use with infection/blight. |
 | `ashmark_hunter` | Visitor | Yes | No | Story | No | NPC, not random wildlife. |

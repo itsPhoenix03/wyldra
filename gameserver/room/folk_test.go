@@ -130,7 +130,11 @@ func TestFolkDay(t *testing.T) {
 	seen := map[string]bool{}
 	mark := func(what string) { seen[what] = true }
 	var upAt10, upAt14, hiddenAtDusk, outAtDusk, mealSit, mealUp int
-	for f.r.time = 0.09; f.r.time < NightStart; f.r.time += step {
+	// Start in the night, as a real dawn does: everyone walks home from their seat
+	// at the fire and turns in (folkGoingTk ticks at most) before the first wakes.
+	// Starting at dawn instead leaves the late risers still walking home at 0.10
+	// whenever the huts stand on a full ring round the fire, 4-10 tiles from the seats.
+	for f.r.time = 0; f.r.time < NightStart; f.r.time += step {
 		f.r.folkTick()
 		tm := f.r.time
 		for _, fk := range f.r.folk {

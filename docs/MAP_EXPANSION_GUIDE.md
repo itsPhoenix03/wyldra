@@ -19,27 +19,25 @@ Before implementation, record a baseline for the current seed: worldgen time in 
 
 ## Current World Layout
 
-Current values in `shared/world.js`:
+Shipped values in `shared/world.js` (`WORLD_VERSION = 5`):
 
 ```js
-export const SIZE = 320;
-export const ISLES = [[80, 80], [240, 80], [80, 240], [240, 240]];
-export const ISLE_R = 56;
+export const SIZE = 1280;
+export const ISLES = [[180, 180], [1100, 180], [180, 1100], [1100, 1100]];
+export const ISLE_R = 70;
 export const MONOLITHS = ISLES;
-export const CORE = [160, 160];
+export const CORE = [640, 640];
 ```
 
 Current geography:
 
-- Woods: `[80, 80]`
-- Dunes: `[240, 80]`
-- Spire: `[80, 240]`
-- Marsh: `[240, 240]`
-- Core: `[160, 160]`
-- Map size: `320 x 320` tiles
-- Main island radius: about `56` tiles
-- Direct center-to-center distance between neighboring major islands: `160` tiles
-- Approximate water gap between island edges: `160 - 56 - 56 = 48` tiles before coastline noise
+- Woods: `[180, 180]` (grass), Dunes: `[1100, 180]` (sand), Spire: `[180, 1100]` (snow), Marsh: `[1100, 1100]` (mud). The centres are unchanged since the 1280 expansion; v5 changed the land around them.
+- Core: `[640, 640]`, blight ground, an irregular crater (rim radius 12.6-17.8) rather than a disc
+- Map size: `1280 x 1280` tiles
+- Each major island is generated in its own `(2 * MAJOR_HALF + 1)^2` box (`MAJOR_HALF = 88`) round its centre and has no land beyond `LAND_CAP = 85` tiles of it (the Go server's island ownership radius is `ISLE_R + 20`). Its land is a fixed `ISLE_PLANS[k].area` of about 12,250-12,750 tiles before inland water. `ISLE_R = 70` is only the nominal radius now; on seed `hearth-1` the farthest land is 73-80 tiles out.
+- 12 minor isles (`MINOR_ISLES`, radius 9-14), each a single landmass; 5 mountains (`MOUNTAINS`: one per major island and one on the Core) and the Core temple pieces (`TEMPLE_PIECES`)
+- Direct center-to-center distance between neighboring major islands: `920` tiles
+- Approximate water gap between island edges: `920 - 70 - 70 = 780` tiles, about 770 with the real coasts
 
 Current movement in `src/main.ts`:
 
@@ -69,7 +67,89 @@ To get 2-3 minutes of sailing, the route needs roughly:
 3 minutes: 1116 water-route tiles
 ```
 
-So the current 48-160 tile gaps are too short. The map needs larger island separation, route design, or slower boat speed. Prefer map expansion and route design over simply slowing boats, because long ocean space creates room for hazards, reefs, small islands, wrecks, storms, and navigation tension.
+At 1280 the side routes meet that target (about 780 tiles of water between neighboring island edges, roughly 2.1 minutes), while corner-to-Core is only about 567 tiles, roughly 91 seconds (see Minimum 1280 Layout below). Prefer map expansion and route design over simply slowing boats, because long ocean space creates room for hazards, reefs, small islands, wrecks, storms, and navigation tension.
+
+### World Generator (v5)
+
+`WORLD_VERSION` 5 replaced the old radial-noise islands (a noise-jittered disc per island, thresholded noise for lakes, elevation and nodes) with one designed landmass per major island. Coast, inland water, height field, nodes and decor all come from the island's entry in `ISLE_PLANS` plus a few shared clean-up passes. It is still a pure function of the seed, identical in the browser, the legacy server and the Go port.
+
+What shapes each island. Coast features sit in 22.5-degree steps (`DIR16`) from a seeded per-island rotation, so the layout turns with the seed; bays and fjords never cut toward the island's mountain.
+
+| Island | Coast | Inland water | Ground |
+|---|---|---|---|
+| Woods | Broad and lobed (`lobe` 0.2): two deep bays and a peninsula | One large lake, always, plus up to two small ponds | Rolling L1-L2 lowland with forested L3 hills; two rock outcrops (`woodsScarps`: a raised L3 table with one rock face and a one-step back slope) |
+| Dunes | Smooth beaches, two thin sand spits swinging outward, one bay, a fat peninsula | An oasis (radius 9.5) and maybe a small pool | A field of crescent (barchan) dunes, horns pointing downwind along a 30 degree wind (`barchans`, one dune per `BARCHAN_CELL` cell), flat pans between them, and up to 8 placed rocks (`DUNE_ROCKS`, sited by `duneRockSites`): four tables or buttes (an L2 rim, with an L3 top on the tall ones) and four small outcrops, each a warped lobed blob kept inland |
+| Spire | Jagged (`jag` 0.2), five bent fjords | Frozen tarns: one always, two more by noise | Coastal L1 lowland, an L2 plateau, a high L3 massif round the monolith, crags and valleys; glacier and ice-shelf `tileVis` |
+| Marsh | Ragged mudflat coast, two bays, the most offshore islets | No lakes: pools of mixed size, meandering channels that widen, narrow and taper out (`marshWaters`), and the village fishing pool (`MARSH_FISHING_POOL`) | Low and flat (about 89% L1), scattered hummocks, almost no L3 |
+| Core | Irregular crater, rim radius 12.6-17.8 | None | All L1 blight, ash patches near the rim, `LAVA_VENTS` (6) lava vents |
+| Minors | One landmass each, a warped lobed coast within `r + 5.5` | None | Domed interior; level thresholds and shore width per kind in `MINOR_STYLE`; the old noise node rule |
+
+Seed `hearth-1`, as measured by `tools/worldmap` (other seeds differ a little; land area is fixed before inland water is carved):
+
+| Region | Land tiles | L1 / L2 / L3 | Inland water | Nodes | Decor |
+|---|---:|---|---|---:|---:|
+| Woods | 12,031 | 5,555 / 4,798 / 1,678 | 506 (3 lakes) | 1,608 | 69 |
+| Dunes | 11,925 | 9,030 / 1,799 / 1,096 | 410 (2) | 589 | 31 |
+| Spire | 12,345 | 3,914 / 5,350 / 3,081 | 226 (2) | 958 | 27 |
+| Marsh | 12,374 | 10,981 / 1,389 / 4 | 805 (34 pools and channels) | 603 | 38 |
+| Core | 740 | 740 / 0 / 0 | 0 | 0 | 6 |
+| 12 minors | 5,414 | 3,479 / 1,108 / 827 | 0 | 344 | 0 |
+
+Generation passes, in order (`genWorld`):
+
+1. Major islands, `islandPass(k)`, each in its own box:
+   - a. Coastline: radial falloff plus domain-warped noise octaves (`warp`, `lobe`, `oct`, `jag`) plus the plan's designed `feats` (bays, peninsulas, fjords, spits). Land is the `area` tiles with the highest coast value (a quantile, so every seed gets the same area). Clearing and mountain discs are forced to land, and offshore islets rise in a band just off the coast.
+   - b. Tidy: one-tile spikes and notches smoothed, land specks smaller than `SPECK` (12) removed, enclosed lagoons smaller than `LAGOON_FILL` (60) filled.
+   - c. Ocean: water connected to the box edge, and the distance to it.
+   - d. Inland water: the plan's `lakes` (sited by `lakeSite`, at least 6 tiles from the sea) or, on the Marsh, `marshWaters`; never near a clearing, the mountain or the monolith (`dryClear`). Shores are smoothed, tiny ponds (`minPond`) filled, lake specks removed, and any land the water cut off is rejoined to the island by a one-tile causeway (`reconnect`).
+   - e. Distances: final ocean, to any water, to inland water.
+   - f. Terrain: the biome's height field, clearings eased flat, quantised to levels 1-3 with the plan's `t1` / `t2`, then `smoothLevels` (bump and pit clean-up), `ensureClimbable`, and `settleTerraces`: `trimSpikes`, `unwallPockets`, `breakStraightCliffs` and `breakStraightLedges` repeated until none changes anything, then the climb check again (at most 4 rounds; it always runs last), then `levelStubs` (lone ledge dashes) with a re-settle after each round (at most 3).
+   - g. Dressing, `dressIsland`: `tileVis`, nodes (`NODE_QUOTAS`; rocks through `placeRocks`) and decor (`DECOR_QUOTA`).
+2. The Core, `coreRegion`: crater, ash `tileVis`, lava vents.
+3. Minor isles, `minorPass`, with the same level clean-up.
+4. Mountain ground stamp: the 3x3 footprint under every mountain becomes ground if it was water.
+5. Derived layers, once every tile is final: `veins`, `waterTemp`, `bergs`.
+6. The `nodes` and `decor` maps, built in tile-index order.
+
+Guarantees. These hold by construction on every seed; `tools/worldmap` reports the measurable ones (specks, reachability, monolith and note tiles, node counts):
+
+- Monolith plazas and lore-note tiles are always land. `CLEARINGS` forces a disc of `land` radius to ground (11 around each monolith, 2 around its note tile at +7,+4), lakes keep clear of it, and the mountain ground stamp is a last backstop.
+- Clearings exist for the spawn, both medics, the four villages and the monolith plazas (`CLEARINGS`, with `PLAZA_LVL`, `VILLAGE_FIRE_OFF` and `MEDIC_ANCHOR_OFFSETS`). Each is levelled to a terrace level (`lvl`) inside `flat` and eased back to the terrain over `blend`; `free` is kept clear of nodes and decor, `land` is always island ground.
+- No land piece on a major island is smaller than `SPECK` (12 tiles); offshore islets of 12 or more tiles can remain.
+- Every land tile is walkable from the shore with the normal +1 climb (`ensureClimbable` cuts a ramp wherever it is not, and runs last in `settleTerraces`), on the major islands and the minors.
+- No walled pockets: a small same-level region mostly ringed by walls 2+ levels higher has those walls cut down to ledges (`unwallPockets`).
+- No ruler-straight cliffs or ledges: a run of more than 6 two-level edges along a tile axis is notched every 7th edge (`breakStraightCliffs`); a run of more than 8 one-level edges whose higher tile is to the north or west (the faces the iso view draws) gets a two-tile notch every 9th edge (`breakStraightLedges`).
+- No one-tile pillars and no 1-2-tile raised tongues poking into the sea (`trimSpikes`), and no lone ledge dashes: a jog of at most 3 drawn one-level edges is levelled by lowering or raising a strip of up to `STUB_STRIP` (8) tiles, whichever is shorter, never raising next to the sea (`levelStubs`).
+- Node and decor counts are quotas per island (`NODE_QUOTAS`, `DECOR_QUOTA`), not threshold luck; the spawn glade thins trees so none within `GLADE_EDGE` (9) tiles of the spawn touch. Rocks (boulder, stone, crystal, starmetal) are placed by `placeRocks`: no rock touches another side-on more than once (so no 2x2 blocks or rows of 3) and a new rock has at most two rocks among its eight neighbours; boulders are spread further (no rock at all among their eight neighbours when placed); the quota spills outward onto rims and aprons rather than packing the best spots.
+- `waterTemp` and `bergs` are derived after the mountain stamp, so land never carries a water temperature and no iceberg sits on land.
+
+Where the tunables live (all in `shared/world.js`):
+
+| Knob | Name |
+|---|---|
+| Island area, lobing, warp, coast octaves, ridged headlands, islets, designed bays / peninsulas / fjords / spits, lakes, minimum pond, level thresholds | `ISLE_PLANS[k]` (`area`, `lobe`, `warp`, `oct`, `jag`, `islet`, `isletBand`, `feats`, `lakes`, `minPond`, `t1`, `t2`) |
+| Terrace clean-up and rock spacing | `settleTerraces` (`trimSpikes`, `unwallPockets`, `breakStraightCliffs`, `breakStraightLedges`, `ensureClimbable`), `levelStubs` / `STUB_STRIP`, `placeRocks` |
+| Box size, land cap, nominal coast radius, speck and lagoon limits, spawn glade | `MAJOR_HALF`, `LAND_CAP`, `BASE_R`, `SPECK`, `LAGOON_FILL`, `GLADE_EDGE` |
+| Flat, guaranteed-land and node-free ground (plazas, spawn, medics, villages) | `CLEARINGS`, `PLAZA_LVL`, `VILLAGE_FIRE_OFF`, `MEDIC_ANCHOR_OFFSETS` |
+| Nodes per island: kind, count, scorer | `NODE_QUOTAS`; the scorers are the `S` table in `dressIsland` |
+| Decor count per island, its prop, Core lava vents | `DECOR_QUOTA`, `DECOR_KEYS`, `LAVA_VENTS` |
+| Marsh fishing pool | `MARSH_FISHING_POOL` |
+| Per-biome height fields | inline in `islandPass` step f, plus `woodsScarps` / `applyScarps`, `barchans` / `BARCHAN_CELL` and `DUNE_ROCKS` / `duneRockSites` (Dunes), and `marshWaters` |
+| Minor isles | `MINOR_ISLES`, `MINOR_KIND_TILE`, `MINOR_STYLE` |
+
+### Changing The Generator
+
+1. Edit `shared/world.js`. Retune the plan numbers before touching the per-biome fields.
+2. Bump `WORLD_VERSION`. Every tile index in an older save now means different ground; the servers keep the players and reset the world for a same-seed older version (`docs/10_GO_WIRE_PROTOCOL.md` section 8.5).
+3. Keep the Go port, `gameserver/world/`, bit-exact. The generator is written for it: only seeded simplex fields, `+ - * /`, `Math.abs/floor/min/max/hypot`, fixed scan orders (row-major, neighbours W E N S), `Int32Array` BFS queues, and sorts of plain numbers or with a total-order comparator (`pickTop` ranks by score descending, then tile index ascending). Run `npm run test:parity` (`tools/worldparity/compare.mjs`); it must pass on every seed in `tools/worldparity/seeds.json`.
+4. Re-pin the `hearth-1` digests and counts in `gameserver/world/world_test.go`, and move the Go folk village fires with `CLEARINGS` (`VILLAGE_FIRE_OFF` mirrors `folkVillageDefs` in `gameserver/world/folk.go`).
+5. Check the result visually and numerically with the worldmap tool:
+
+```text
+node tools/worldmap/render.mjs [seed] [outDir] [--scale=N] [--crop=x,y,size[,name]]... [--metrics-only]
+```
+
+It writes `overview.png`, one 200x200-tile crop per major island, `core.png` and any `--crop` you ask for, plus `metrics.json`, and prints the same numbers: land, elevation split, lakes, land pieces, nodes per kind, cliffs and ledges, bumps and pits, reachability with +1 and +2 climbing, landable coast, and the monolith and note-tile checks. The default seed is `hearth-1`; use `--metrics-only` to skip the images.
 
 ## Key Design Goals
 
@@ -934,6 +1014,8 @@ if (s.version !== WORLD_VERSION || s.layout !== WORLD_LAYOUT || s.seed !== SEED)
 ```
 
 This prevents old structures, digs, broken icebergs, and profile coordinates from being interpreted against a new tile-index layout. On rejection, log one clear reason and start a new world; do not partially load compatible-looking sections.
+
+Shipped behaviour (since v5): that rejection applies to a different seed or a newer version. A same-seed save from an older `WORLD_VERSION` is migrated instead: player profiles are kept (respawned at spawn), the tile-indexed world is reset, and the old file is first copied to `<save>.v<old>.bak`. See `docs/10_GO_WIRE_PROTOCOL.md` section 8.5.
 
 Validate every restored coordinate before indexing arrays:
 
