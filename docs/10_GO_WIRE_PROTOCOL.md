@@ -346,6 +346,35 @@ node respawn timers. Two fields are stored as durations rather than absolute
 clocks, because neither clock survives a restart: node respawns as milliseconds
 remaining, and farms as ticks elapsed since planting.
 
+**When the map changes, the players stay and the world resets.** Every save
+carries the `WORLD_VERSION` and seed it was written under, and every tile index in
+it is only meaningful on that terrain. On load (`room.loadSave`):
+
+- **Same seed, same version** — a normal load.
+- **Same seed, older version** — a migration (`room.migrateSave`). Kept: every
+  profile (name, HP, hunger, thirst, inventory, tools, gear, worn gear, armor),
+  the monolith states (`mono`), `won`, `day` and `time`. Dropped: everything
+  tile-indexed — node respawns, mud, felled-tree counters, structures, digs,
+  torches, furniture, broken icebergs, farms, chest contents and modules (so beds
+  and campfires, and with them respawn points, go too). Each kept profile's `x`/`y`
+  becomes `persist.NoPos` (-1) and `z` becomes 0: the room never restores a position
+  outside the world, so the keeper joins at the normal spawn on the surface instead
+  of at coordinates that now mean different ground or inside a mine that is gone.
+  One line is logged (`world v4 -> v5: map changed — kept N player profiles, reset
+  the world`, plus the backup path below). The next save is written in the current
+  version, so a migration runs once; a profile nobody has rejoined keeps `NoPos`
+  until they do. Before anything can overwrite the old world, the file is copied
+  as-is to `<save file>.v<oldVersion>.bak` beside it (`world.default.save.json.v4.bak`,
+  `save.json.v4.bak`; through the optional `persist.Archiver` store capability, so
+  in-memory stores skip it). The copy is made once: if that `.bak` already exists a
+  rerun leaves it alone, so a crash mid-migration cannot replace the pristine copy.
+  A failed backup is logged and does not stop the server.
+- **Different seed, a newer version than this build, or no version** — the save is
+  ignored and the world starts fresh, profiles included (the next save overwrites it).
+
+The legacy server (`server/index.js`) follows the same rule, with `x`/`y` of -1 in
+its profiles.
+
 ---
 
 ### 8.6 The land heals

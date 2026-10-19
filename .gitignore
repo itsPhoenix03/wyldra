@@ -10,6 +10,9 @@ src/generated/
 server/save.json
 gameserver/world.save.json
 gameserver/world.*.save.json
+# the pre-migration copy a map change makes of an older save (save.json.v4.bak)
+*.save.json.v*.bak
+server/save.json.v*.bak
 
 # logs & scratch
 *.log

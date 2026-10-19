@@ -23,6 +23,13 @@ import (
 	"sync"
 )
 
+// NoPos is the X/Y of a profile that has no usable saved position. The room
+// never restores a position outside the world, so such a profile takes the same
+// path as a brand-new player and spawns at the world spawn. A map migration
+// (see room.migrateSave) writes it, because the saved coordinates belong to a
+// terrain that no longer exists.
+const NoPos = -1.0
+
 // Profile is the durable per-player record, keyed by ticket userId.
 type Profile struct {
 	Name   string         `json:"name"`
@@ -110,6 +117,17 @@ type Store interface {
 	Save(*Snapshot) error
 }
 
+// Archiver is an optional Store capability: set the saved world aside before the
+// room replaces it. The room calls it when it migrates a save from an older map,
+// because the next save overwrites that world for good.
+type Archiver interface {
+	// Archive copies the current save to a backup named for version. It returns
+	// the backup's location and whether it wrote one: a backup that already
+	// exists is left alone (a crash and rerun must not replace the pristine
+	// copy with a half-migrated one), and nothing saved means nothing to copy.
+	Archive(version int) (path string, created bool, err error)
+}
+
 // NopStore discards everything. Used in tests and when persistence is disabled.
 type NopStore struct{}
 
@@ -145,6 +163,33 @@ func (s *JSONStore) Load() (*Snapshot, error) {
 		return nil, fmt.Errorf("persist: %s is not valid JSON: %w", s.Path, err)
 	}
 	return &snap, nil
+}
+
+// Archive copies the save file as-is to "<path>.v<version>.bak", beside it.
+func (s *JSONStore) Archive(version int) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	bak := fmt.Sprintf("%s.v%d.bak", s.Path, version)
+	if _, err := os.Stat(bak); err == nil {
+		return bak, false, nil
+	}
+	b, err := os.ReadFile(s.Path)
+	if os.IsNotExist(err) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	// Via a temp file, so a crash mid-copy cannot leave a truncated .bak that
+	// would then block the real one.
+	tmp := bak + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return "", false, err
+	}
+	if err := os.Rename(tmp, bak); err != nil {
+		return "", false, err
+	}
+	return bak, true, nil
 }
 
 // Save writes the snapshot atomically.
