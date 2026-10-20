@@ -39,6 +39,7 @@ import { KeeperVoice } from "./keeperVoice.ts";
 import { pickView, viewKey, type View } from "./facing.ts";
 import { ROTATABLE_MODS, facing, facingCount } from "./rotation.ts";
 import { TileStore, UNLOADED, CHUNK, type ChunkMsg } from "./tiles.ts";
+import { MountainView, type PeakHost } from "./peaks.ts";
 import { LEGACY, LEGACY_WS_PORT, takeJoin, identityToken } from "./net.ts";
 
 const TW = 64,
@@ -171,6 +172,30 @@ const KICK_REASON_MSG: Record<string, string> = {
 };
 const CHW = 1024,
   CHH = 512;
+// The sprite mountains' 3x3 footprints (part of LANDMARK_BLOCK). With the tile mountains
+// up there is no sprite there, so they stop blocking (server: room/mountains.go landmarkBlocks).
+const MOUNTAIN_BLOCK = new Set<number>(
+  MOUNTAINS.flatMap((m: { x: number; y: number }) =>
+    [-1, 0, 1].flatMap((dy) => [-1, 0, 1].map((dx) => (m.y + dy) * SIZE + m.x + dx)),
+  ),
+);
+// Mountain tileVis values (gameserver/world/mountains.go) -> the part of the island's rock
+// art; the island comes from the tile type the mountain keeps.
+const MTN_PART: Record<number, string> = { 2: "rock", 3: "ledge", 4: "snow", 5: "snowledge", 6: "trail" };
+// The tester panel's feature-flag switches: [flag, label, hint]. The server's registry
+// (gameserver/room/features.go featureDefs) is the authority; a flag missing here just has no box.
+const FEATURE_FLAGS: [string, string, string][] = [
+  ["tileMountains", "Tile mountains", "Mountains built from stacked tiles instead of sprites (the ground is rebuilt)"],
+  ["cameraPeek", "Camera peek", "The camera leans toward hidden ground and height changes while you move"],
+];
+const MTN_ISLE: Record<number, string> ={ [T.GRASS]: "woods", [T.SAND]: "dunes", [T.SNOW]: "spire", [T.MUD]: "marsh", [T.BLIGHT]: "core" };
+// Camera peek (cameraPeek): how far the view leans, in screen px, and how it eases.
+const PEEK_AHEAD = 92, // along the way the keeper walks
+  PEEK_HIDDEN = 64, // and on toward the far side of what hides them
+  PEEK_MAX = 128,
+  PEEK_HOLD = 0.4, // s the lean holds once the trigger stops (a stop, or a flicker between tiles)
+  PEEK_IN = 0.3, // s time constant easing out to the lean
+  PEEK_OUT = 0.27; // and back to centre (~0.8 s to settle)
 // Max world area a player may ever see. Zooming the browser out enlarges the canvas in CSS
 // pixels, which would otherwise reveal the whole island — camera zoom scales to compensate so
 // the visible slice of world stays fixed regardless of page zoom or window size.
@@ -383,6 +408,27 @@ class Hearth extends Phaser.Scene {
   myName = "Keeper";
   // menu Settings → "Show player names"; read once per scene, so a toggle lands on the next join
   showNames = getSetting("hearth-shownames");
+  /**
+   * The world's feature flags (gameserver/room/features.go), from `init.features` and
+   * every `feat` broadcast. The legacy server sends none: no tile mountains there (its
+   * world is the shared/world.js one), and the camera peek stays on.
+   */
+  features = { tileMountains: false, cameraPeek: true };
+  // menu Settings → "Camera peek": the player's own half of the switch (cameraPeek AND this)
+  peekSetting = getSetting("hearth-camerapeek");
+  /** Tile mountains on screen: strips that hide what is behind them, ground-plane depth (peaks.ts). */
+  peaks = new MountainView(this as unknown as PeakHost);
+  // camera peek state: the eased follow offset and its target, in screen px
+  private peekX = 0;
+  private peekY = 0;
+  private peekTX = 0;
+  private peekTY = 0;
+  private peekHold = 0;
+  private peekDirX = 0;
+  private peekDirY = 0;
+  // the keeper's see-through silhouette, drawn over the terrain when a mountain hides them
+  private ghostRT: Phaser.GameObjects.RenderTexture | null = null;
+  private menuEls: HTMLElement[] = [];
   knockedUntil = 0; // ms timestamp: player knockback active until this time
   slowUntil = 0; // tick count: frost_wraith slow active until this tick (client-side)
   vignetteRect!: Phaser.GameObjects.Rectangle; // red damage flash overlay
@@ -403,6 +449,20 @@ class Hearth extends Phaser.Scene {
     const p = this.iso(x, y);
     p.y -= Math.max(0, this.elevAt(x, y) - 1) * 10;
     return p;
+  }
+  /**
+   * Sort depth for something standing at world (x, y), drawn `off` px below its tile's
+   * lifted top vertex. Everywhere but round a tile mountain that is the lifted screen y
+   * plus the offset, exactly as every sprite has always sorted; inside a mountain's
+   * region it is ground-plane depth, so the mountain's strips hide what is behind it
+   * (peaks.ts). Every sprite that can stand near a mountain takes its depth from here.
+   */
+  depthAt(x: number, y: number, off = 0) {
+    return this.peaks.depthAt(x, y, off) ?? this.isoE(x, y).y + off;
+  }
+  /** LANDMARK_BLOCK as this world has it: the sprite mountains' footprints only block while they stand. */
+  landmarkBlocked(i: number) {
+    return LANDMARK_BLOCK.has(i) && !(this.features.tileMountains && MOUNTAIN_BLOCK.has(i));
   }
   unIso(sx: number, sy: number) {
     const lx = sx - this.offX;
@@ -686,6 +746,15 @@ class Hearth extends Phaser.Scene {
       `<span style="color:#9be37a">■</span> other players: swing reach<br>` +
       `<span style="color:#ff5a4a">■</span> enemy contact 1.1 · <span style="color:#ffa040">■</span> ranged band<br>` +
       `<span style="color:#c08cff">■</span> wraith dart range · arrows: next 1s of motion</div>` +
+      // Feature flags (gameserver/room/features.go): the whole world's switches, so each
+      // one is a devcmd and the boxes show what the server says (`feat`), not what was clicked.
+      `<div style="color:#9ab;margin:6px 0 4px">Feature flags <span style="color:#678">(whole world)</span></div>` +
+      FEATURE_FLAGS.map(
+        ([name, label, hint]) =>
+          `<label style="display:block;cursor:pointer;margin:1px 0" title="${hint}">` +
+          `<input type="checkbox" data-feat="${name}"> ${label}</label>`,
+      ).join("") +
+      `<div style="color:#789;font-size:11px;line-height:1.5;margin-top:2px">Camera peek also needs the player's own Settings toggle.</div>` +
       `</div>` +
       `<style>#devPanel button{background:#2a3a4a;color:#fff;border:1px solid #57a;border-radius:4px;` +
       `margin:2px;padding:3px 7px;cursor:pointer;font:12px monospace}#devPanel button:hover{background:#3a5a4a}` +
@@ -695,6 +764,14 @@ class Hearth extends Phaser.Scene {
     const ranges = document.getElementById("devRanges") as HTMLInputElement;
     ranges.checked = this.dev.rangesOn;
     ranges.addEventListener("change", () => this.dev.setRanges(ranges.checked));
+    for (const box of Array.from(d.querySelectorAll<HTMLInputElement>("input[data-feat]")))
+      box.addEventListener("change", () => {
+        const name = box.dataset.feat as keyof Hearth["features"];
+        const on = box.checked;
+        box.checked = this.features[name]; // shown as the server has it until `feat` says otherwise
+        if (this.devEnabled) this.send({ t: "devcmd", cmd: "feat", name, on });
+      });
+    this.syncDevFeatures();
     d.addEventListener("click", (e) => {
       const b = (e.target as HTMLElement).closest("button") as HTMLButtonElement | null;
       if (!b || !this.devEnabled) return;
@@ -717,6 +794,29 @@ class Hearth extends Phaser.Scene {
       }
       else if (b.dataset.cmd) this.send({ t: "devcmd", cmd: b.dataset.cmd });
     });
+  }
+
+  /** The tester panel's flag boxes, ticked as the world has them. */
+  syncDevFeatures() {
+    for (const box of Array.from(document.querySelectorAll<HTMLInputElement>("#devPanel input[data-feat]")))
+      box.checked = this.features[box.dataset.feat as keyof Hearth["features"]] === true;
+  }
+
+  /**
+   * The world's feature flags arrived (`init.features`, `feat`). A missing field is the
+   * legacy server: no tile mountains, peek on. Switching tileMountains swaps the sprite
+   * mountains for the tile ones; the ground itself follows in the chunks the server
+   * re-streams right behind the `feat`.
+   */
+  applyFeatures(f: any) {
+    const next = { tileMountains: f?.tileMountains === true, cameraPeek: f?.cameraPeek !== false };
+    const mtn = next.tileMountains !== this.features.tileMountains;
+    this.features = next;
+    if (mtn) {
+      this.peaks.setEnabled(next.tileMountains);
+      for (const s of this.mountainSpr) s.setVisible(!next.tileMountains);
+    }
+    this.syncDevFeatures();
   }
 
   /** Swap the panel between its live controls and the "not enabled" note. */
@@ -839,7 +939,7 @@ class Hearth extends Phaser.Scene {
   }
 
   /** The lip textures tile i needs: one per edge whose neighbour is dry land 2+ levels below. */
-  private lipsAt(x: number, y: number): string[] {
+  lipsAt(x: number, y: number): string[] {
     const e = this.world.elev[y * SIZE + x], out: string[] = [];
     for (const [dx, dy, key] of [[0, -1, "lip-ne"], [1, 0, "lip-es"], [0, 1, "lip-sw"], [-1, 0, "lip-wn"]] as const) {
       const nx = x + dx, ny = y + dy;
@@ -1209,7 +1309,7 @@ class Hearth extends Phaser.Scene {
       }
   }
 
-  private tileKey(i: number): string | null {
+  tileKey(i: number): string | null {
     if (this.mutTiles.has(i)) return this.mutTiles.get(i)!;
     const t = this.world.tiles[i];
     // Not streamed yet — draw nothing. Painting it as water would be a lie: water is
@@ -1221,7 +1321,20 @@ class Hearth extends Phaser.Scene {
       if (wt === 2) return "water_hot";
       return "water";
     }
-    if (this.world.tileVis?.[i] === 1) {
+    const vis = this.world.tileVis?.[i] ?? 0;
+    if (vis >= 2) {
+      // a tile mountain (gameserver/world/mountains.go): the island's rock, by part. Only
+      // the Woods and the Spire have snow art; a snow value elsewhere falls back to rock.
+      const isle = MTN_ISLE[t];
+      let part = MTN_PART[vis];
+      if (isle && part) {
+        if ((part === "snow" || part === "snowledge") && isle !== "woods" && isle !== "spire")
+          part = part === "snow" ? "rock" : "ledge";
+        const key = `mtn_${isle}_${part}`;
+        if (this.textures.exists(key)) return key;
+      }
+    }
+    if (vis === 1) {
       if (t === T.GRASS) return "flower_grass";
       if (t === T.SAND) return "cracked_sand";
       if (t === T.SNOW) return "packed_ice";
@@ -1237,7 +1350,10 @@ class Hearth extends Phaser.Scene {
       .setOrigin(0)
       .setDepth(-1)
       .setAlpha(this.z !== 0 ? 0.15 : 1);
+    // padB: a tile stack rises up to (12 - 1) levels of 10px (gameserver/world/mountains.go
+    // MaxElev), so a tile whose foot is that far below the chunk still reaches into it
     const pad = 80,
+      padB = pad + 120,
       rx = cx * CHW,
       ry = cy * CHH;
     const inv = (sx: number, sy: number) => ({
@@ -1247,8 +1363,8 @@ class Hearth extends Phaser.Scene {
     const cs = [
       inv(rx - pad, ry - pad),
       inv(rx + CHW + pad, ry - pad),
-      inv(rx - pad, ry + CHH + pad),
-      inv(rx + CHW + pad, ry + CHH + pad),
+      inv(rx - pad, ry + CHH + padB),
+      inv(rx + CHW + pad, ry + CHH + padB),
     ];
     // Task 3b: compute unclamped tile range for ocean rendering
     const tx0 = Math.floor(Math.min(...cs.map((c) => c.tx)));
@@ -1263,7 +1379,7 @@ class Hearth extends Phaser.Scene {
           p.x < rx - pad ||
           p.x > rx + CHW + pad ||
           p.y < ry - pad ||
-          p.y > ry + CHH + pad
+          p.y > ry + CHH + padB
         )
           continue;
         // Task 3b: out-of-bounds tiles render as ocean water
@@ -1290,6 +1406,7 @@ class Hearth extends Phaser.Scene {
     if (key) this.mutTiles.set(i, key);
     else this.mutTiles.delete(i);
     this.repaintTileBox(i % SIZE, (i / SIZE) | 0);
+    this.peaks.tileChanged(i); // a tall mountain tile is also in a strip
   }
 
   /**
@@ -1312,9 +1429,10 @@ class Hearth extends Phaser.Scene {
       bh = Math.ceil(p0.y + TILE_H - by);
     const scratch = this.make.renderTexture({ width: bw, height: bh }, false).setOrigin(0); // stamped by its top-left corner
     scratch.beginDraw();
-    // a tile stack reaches at most ~8 levels: 6 tiles either way covers every overlap
-    for (let ty = y - 6; ty <= y + 6; ty++)
-      for (let tx = x - 6; tx <= x + 6; tx++) {
+    // a tile stack reaches at most 12 levels (110 px, the tile mountains): 7 tiles either
+    // way covers every stack that overlaps the box, in front of it or behind
+    for (let ty = y - 7; ty <= y + 7; ty++)
+      for (let tx = x - 7; tx <= x + 7; tx++) {
         const p = this.iso(tx, ty);
         const left = p.x - TW / 2;
         if (left >= bx + bw || left + TW <= bx) continue;
@@ -1444,9 +1562,9 @@ class Hearth extends Phaser.Scene {
     const s = this.add
       .image(p.x, p.y + 16, tex)
       .setOrigin(0.5, 0.92)
-      .setDepth(p.y + 21)
       .setScale(scale * 1.3)
       .setAlpha(alpha);
+    this.standAt(s, i % SIZE, (i / SIZE) | 0, 21);
     if (stage === 0 && crop === "glowcap") s.setTint(0x7fd6c8); // glowcap shoots are pale teal
     if (stage === 1 && crop !== "glowcap") s.setTint(0xa9d27f); // unripe wheat is green
     // crop growth pop: brief scale pulse settling into the target stage scale
@@ -1468,6 +1586,8 @@ class Hearth extends Phaser.Scene {
     this.baseZoom = z === 1 ? 1.02 : 1;
     this.applyViewClamp(400);
     for (const rt of this.chunks.values()) rt.setAlpha(surfA);
+    this.peaks.setZ(z); // the mountains' strips stand on the surface only
+    this.ghostRT?.setVisible(false);
     // nodes: fully hidden in mines (faded ghosts would read as "inside the cave")
     for (const s of this.nodeSpr.values()) {
       s.setVisible(z !== 1);
@@ -1682,6 +1802,8 @@ class Hearth extends Phaser.Scene {
       // `dev` is absent on the legacy server, where LEGACY already keeps us optimistic.
       if (!LEGACY) this.devEnabled = m.dev === true;
       this.applyDevAccess();
+      // the world's feature flags (absent on the legacy server: see `features`)
+      this.applyFeatures(m.features);
       // Task 4: wornGear from init
       this.wornGear = m.wornGear ?? null;
       this.armorOn = m.armor === true;
@@ -1733,6 +1855,9 @@ class Hearth extends Phaser.Scene {
       );
     } else if (m.t === "chunk") {
       this.applyChunkMsg(m as ChunkMsg);
+    } else if (m.t === "feat") {
+      // a tester switched a feature flag (devcmd feat); the chunks it reshaped follow
+      this.applyFeatures(m.features);
     } else if (m.t === "time") {
       // §4.5: Slice 1 sends no 'cre', so the clock is its own per-tick broadcast.
       this.wtime = m.time;
@@ -2372,6 +2497,7 @@ class Hearth extends Phaser.Scene {
   private trackLift(spr: Phaser.GameObjects.Image, x: number, y: number) {
     const g = this.isoE(x, y).y;
     spr.setData("lx", x).setData("ly", y).setData("oy", spr.y - g).setData("od", spr.depth - g);
+    spr.setDepth(this.depthAt(x, y, spr.depth - g));
     this.liftSpr.push(spr);
     return spr;
   }
@@ -2379,8 +2505,59 @@ class Hearth extends Phaser.Scene {
   private reliftLandmarks() {
     for (const s of this.liftSpr) {
       const g = this.isoE(s.getData("lx"), s.getData("ly")).y;
-      s.setY(g + s.getData("oy")).setDepth(g + s.getData("od"));
+      s.setY(g + s.getData("oy")).setDepth(this.depthAt(s.getData("lx"), s.getData("ly"), s.getData("od")));
     }
+  }
+
+  /**
+   * Record where a placed sprite stands — tile (x, y), its depth `off` px below the
+   * tile's lifted top vertex — and set its depth from there (depthAt). restand() can
+   * then follow the ground under it when that changes (a tile mountain stamped or lifted
+   * off) or re-sort it when a mountain region comes or goes.
+   */
+  private standAt<S extends Phaser.GameObjects.GameObject & Phaser.GameObjects.Components.Depth & { y: number }>(
+    s: S, x: number, y: number, off: number,
+  ): S {
+    s.setData("sx", x).setData("sy", y).setData("dOff", off).setData("gy", this.isoE(x, y).y);
+    s.setDepth(this.depthAt(x, y, off));
+    return s;
+  }
+
+  private restand(s: Phaser.GameObjects.GameObject & Phaser.GameObjects.Components.Depth & { y: number }) {
+    const x = s.getData("sx"),
+      y = s.getData("sy");
+    if (x === undefined) return;
+    const g = this.isoE(x, y).y;
+    s.y += g - s.getData("gy");
+    s.setData("gy", g).setDepth(this.depthAt(x, y, s.getData("dOff")));
+  }
+
+  /**
+   * PeakHost: re-seat every placed sprite on tiles [x0..x1] x [y0..y1] — on the ground
+   * as it now is, at the depth it now sorts by. Called when a mountain region appears,
+   * moves or goes, and when a re-sent chunk changed the ground (rare: a flag toggle).
+   */
+  redepthBox(x0: number, y0: number, x1: number, y1: number) {
+    const inBox = (i: number) => {
+      const x = i % SIZE, y = (i / SIZE) | 0;
+      return x >= x0 && x <= x1 && y >= y0 && y <= y1;
+    };
+    for (const [i, s] of this.nodeSpr) if (inBox(i)) this.restand(s);
+    for (const [i, s] of this.decorSpr) if (inBox(i)) this.restand(s);
+    for (const [i, s] of this.cropSpr) if (inBox(i)) this.restand(s);
+    for (const [i, e] of this.structSpr)
+      if (inBox(i)) {
+        this.restand(e.spr);
+        e.extra.forEach((s) => this.restand(s));
+        if (e.glow) this.restand(e.glow);
+      }
+    for (const s of this.modSpr.values()) if (inBox(s.getData("i"))) this.restand(s);
+    for (const md of this.medics) {
+      const s = this.medicSpr.get(md.id), h = this.medicHutSpr.get(md.id);
+      if (s && inBox(md.y * SIZE + md.x)) this.restand(s);
+      if (h && inBox(md.hutY * SIZE + md.hutX)) this.restand(h);
+    }
+    this.reliftLandmarks();
   }
 
   addBerg(i: number) {
@@ -2403,8 +2580,8 @@ class Hearth extends Phaser.Scene {
     const ds = this.add
       .image(dp.x, dp.y, key)
       .setOrigin(0.5, 0.92)
-      .setDepth(dp.y + 18) // lifted ground y, like every mover (see trackLift)
       .setVisible(!this.tileBuilt(i));
+    this.standAt(ds, dx2, dy2, 18); // lifted ground y, like every mover (see trackLift)
     this.decorSpr.set(i, ds);
   }
 
@@ -2466,18 +2643,16 @@ class Hearth extends Phaser.Scene {
       const hp = this.isoE(md.hutX, md.hutY);
       this.medicHutSpr.set(
         md.id,
-        this.add
+        this.standAt(this.add
           .image(hp.x, hp.y + 16, md.hutSprite)
           .setOrigin(0.5, 0.92)
-          .setDepth(hp.y + 18)
-          .setVisible(this.z === 0),
+          .setVisible(this.z === 0), md.hutX, md.hutY, 18),
       );
       const mdp = this.isoE(md.x, md.y);
-      const s = this.add
+      const s = this.standAt(this.add
         .sprite(mdp.x, mdp.y + 16, md.sprite)
         .setOrigin(0.5, 0.92)
-        .setDepth(mdp.y + 18)
-        .setVisible(this.z === 0);
+        .setVisible(this.z === 0), md.x, md.y, 18);
       this.medicSpr.set(md.id, s);
       // the Spire medic shivers now and then between customers
       if (this.anims.exists(`${md.sprite}_shiver`))
@@ -2540,14 +2715,15 @@ class Hearth extends Phaser.Scene {
     const key = `${i}:${slot}`;
     if (this.modSpr.has(key)) return;
     if (!(MODULES as any)[kind]) return; // a kind this client does not know
-    const g = this.modPlacement(slot, i % SIZE, (i / SIZE) | 0);
+    const mx = i % SIZE, my = (i / SIZE) | 0;
+    const g = this.modPlacement(slot, mx, my);
     const [tex, flip] = ROTATABLE_MODS.has(kind) ? facing(kind, dir) : [kind, false];
     const spr = this.add
       .sprite(g.x, g.y, this.textures.exists(tex) ? tex : kind)
       .setFlipX(flip)
       .setOrigin(g.ox, g.oy)
-      .setDepth(g.depth)
       .setAlpha(this.z !== 0 ? 0.15 : 1);
+    this.standAt(spr, mx, my, g.depth - this.isoE(mx, my).y);
     spr.setData("slot", slot).setData("i", i).setData("kind", kind).setData("hp", hp).setData("dir", dir);
     // same pop-in as a structure, so placing reads as weight landing
     const finalY = spr.y;
@@ -2580,6 +2756,29 @@ class Hearth extends Phaser.Scene {
   applyChunkMsg(m: ChunkMsg) {
     const d = this.world.applyChunk(m);
     if (!d) return;
+    if (d.reapplied) {
+      // The server re-sent a chunk it had already sent: its ground changed under us (a
+      // terrain feature flag). What it no longer holds goes; what stays is re-seated on
+      // the new ground; what is new spawns below as for any chunk.
+      for (const i of d.droppedNodes) {
+        this.nodeSpr.get(i)?.destroy();
+        this.nodeSpr.delete(i);
+      }
+      for (const i of d.droppedDecor) {
+        this.decorSpr.get(i)?.destroy();
+        this.decorSpr.delete(i);
+      }
+      const x0 = d.cx * CHUNK, y0 = d.cy * CHUNK;
+      this.redepthBox(x0, y0, x0 + CHUNK - 1, y0 + CHUNK - 1);
+      // remote keepers only move on a `pos`: put them on the new ground now
+      for (const o of this.others.values())
+        if (o.z === 0 && o.wx >= x0 && o.wx < x0 + CHUNK && o.wy >= y0 && o.wy < y0 + CHUNK) {
+          const p = this.isoE(o.wx, o.wy);
+          o.tx = p.x;
+          o.ty = p.y;
+        }
+    }
+    this.peaks.chunkApplied(d.cx, d.cy);
     // §8.3 overlays first, so nothing below draws what is already gone. The
     // chunk is the whole truth for its nodes: harvested ones stay hidden (a felled
     // tree must not reappear on rejoin — or on top of what was built there since),
@@ -2637,9 +2836,9 @@ class Hearth extends Phaser.Scene {
     const s = this.add
       .sprite(p.x, p.y + 20, tex)
       .setOrigin(0.5, 0.92)
-      .setDepth(p.y + 20)
       .setAngle(0)
       .setVisible(this.z !== 1);
+    this.standAt(s, i % SIZE, (i / SIZE) | 0, 20);
     this.nodeSpr.set(i, s);
   }
 
@@ -2656,9 +2855,9 @@ class Hearth extends Phaser.Scene {
       const s = this.add
         .sprite(existing.spr.x, existing.spr.y - off, existing.spr.texture.key)
         .setOrigin(existing.spr.originX, existing.spr.originY)
-        .setDepth(existing.spr.depth + lvl - 1)
         .setFlipX(existing.spr.flipX)
         .setAlpha(this.z !== 0 ? 0.15 : 1);
+      this.standAt(s, i % SIZE, (i / SIZE) | 0, (existing.spr.getData("dOff") ?? 20) + lvl - 1);
       // structure pop-in: new story appears with weight instead of snapping in
       const stFinalY = s.y;
       s.setScale(0.6).setY(stFinalY - 12);
@@ -2680,22 +2879,14 @@ class Hearth extends Phaser.Scene {
     // resolve texture key: some decor kinds map to different asset keys
     const tex = DECOR_TEX[kind] || kind;
     let spr: Phaser.GameObjects.Sprite;
+    const sx = i % SIZE, sy = (i / SIZE) | 0;
     if (isFlat) {
       // flat decor renders below entities, origin (0.5, 0.5)
-      spr = this.add
-        .sprite(p.x, p.y, tex)
-        .setOrigin(0.5, 0.5)
-        .setDepth(p.y - 8);
+      spr = this.standAt(this.add.sprite(p.x, p.y, tex).setOrigin(0.5, 0.5), sx, sy, -8);
     } else if (kind === "wall") {
-      spr = this.add
-        .sprite(p.x, p.y + 16, tex)
-        .setOrigin(0.5, 0.55)
-        .setDepth(p.y + 20);
+      spr = this.standAt(this.add.sprite(p.x, p.y + 16, tex).setOrigin(0.5, 0.55), sx, sy, 20);
     } else {
-      spr = this.add
-        .sprite(p.x, p.y + 20, tex)
-        .setOrigin(0.5, 0.92)
-        .setDepth(p.y + 20);
+      spr = this.standAt(this.add.sprite(p.x, p.y + 20, tex).setOrigin(0.5, 0.92), sx, sy, 20);
     }
     if (kind === "wall" || r?.rot) {
       const [t, flip] = facing(tex, dir);
@@ -2716,17 +2907,15 @@ class Hearth extends Phaser.Scene {
     });
     const entry: any = { spr, extra: [], kind, hp, lvl };
     if (kind === "campfire") {
-      entry.glow = this.add
+      entry.glow = this.standAt(this.add
         .circle(p.x, p.y + 12, 70, 0xffaa44, 0.13)
-        .setDepth(p.y + 19)
-        .setBlendMode(Phaser.BlendModes.ADD);
+        .setBlendMode(Phaser.BlendModes.ADD), sx, sy, 19);
     }
     if (kind === "lantern") {
       // small warm additive glow circle, shown at night
-      entry.glow = this.add
+      entry.glow = this.standAt(this.add
         .circle(p.x, p.y + 10, 45, 0xffcc88, 0.1)
-        .setDepth(p.y + 19)
-        .setBlendMode(Phaser.BlendModes.ADD);
+        .setBlendMode(Phaser.BlendModes.ADD), sx, sy, 19);
     }
     // FEATURE 3: mineshaft exit marker visible from underground
     if (kind === "mineshaft" && !this.exitSpr.has(i)) {
@@ -2795,14 +2984,15 @@ class Hearth extends Phaser.Scene {
       this.monoSpr.push(s);
     });
 
-    // TASK 2a: mountains
+    // TASK 2a: mountains — the sprites stand only while the tile mountains are off
     if (MOUNTAINS) {
       for (const m of MOUNTAINS) {
         const mp2 = this.isoE(m.x, m.y);
         const ms = this.add
           .image(mp2.x, mp2.y, m.key)
           .setOrigin(0.5, 0.9)
-          .setDepth(mp2.y + 40);
+          .setDepth(mp2.y + 40)
+          .setVisible(!this.features.tileMountains);
         this.trackLift(ms, m.x, m.y);
         this.mountainSpr.push(ms);
       }
@@ -2907,8 +3097,7 @@ class Hearth extends Phaser.Scene {
     const wall = this.modSpr.get(`${(y | 0) * SIZE + (x | 0)}:wall`);
     if (wall && (MODULES as any)[wall.getData("kind")]?.blocks) return true;
     // TASK 2d: landmark blocked tiles
-    if (LANDMARK_BLOCK && LANDMARK_BLOCK.has((y | 0) * SIZE + (x | 0)))
-      return true;
+    if (this.landmarkBlocked((y | 0) * SIZE + (x | 0))) return true;
     if (this.medicBlock.has((y | 0) * SIZE + (x | 0))) return true;
     return false;
   }
@@ -3278,10 +3467,13 @@ class Hearth extends Phaser.Scene {
   }
 
   /** A ground telegraph at (x, y): drawn once (the callback), after that only its alpha / scale move. Capped. */
-  private teleStart(x: number, y: number, draw: (g: Phaser.GameObjects.Graphics) => void) {
+  private teleStart(x: number, y: number, draw: (g: Phaser.GameObjects.Graphics) => void, wx?: number, wy?: number) {
     if (this.teleN >= 16) return undefined;
     this.teleN++;
-    const g = this.add.graphics({ x, y }).setDepth(0.5);   // above the terrain (-1), under every body
+    // above the terrain (-1), under every body; round a tile mountain, on its row's
+    // strip (the ground it lies on) and under the bodies standing there
+    const d = wx === undefined || wy === undefined ? null : this.peaks.depthAt(wx, wy, -8);
+    const g = this.add.graphics({ x, y }).setDepth(d ?? 0.5);
     draw(g);
     g.once("destroy", () => this.teleN--);
     return g;
@@ -3321,7 +3513,7 @@ class Hearth extends Phaser.Scene {
       g.lineStyle(lance ? 7 : 5, col, 0.28).lineBetween(ox, oy, a.x, a.y);
       g.lineStyle(lance ? 2.5 : 1.5, col, 1).lineBetween(ox, oy, a.x, a.y);
       g.lineStyle(2, col, 0.9).strokeEllipse(a.x, a.y, 38, 19);   // where it will land
-    });
+    }, m.tx, m.ty);
     if (!g) return;
     const st = { k: 0 };
     const tw = this.tweens.add({
@@ -3362,7 +3554,7 @@ class Hearth extends Phaser.Scene {
       g.lineStyle(2, 0xff6a44, 0.9).strokePoints(q, true);
       const a = P(len, -0.8), b = P(len + 0.8, 0), e = P(len, 0.8);
       g.fillStyle(0xff6a44, 0.8).fillTriangle(a.x, a.y, b.x, b.y, e.x, e.y);
-    });
+    }, s.getData("cx"), s.getData("cy"));
     if (!g) return;
     const st = { k: 0 };
     this.tweens.add({
@@ -3382,7 +3574,7 @@ class Hearth extends Phaser.Scene {
     const g = this.teleStart(s.getData("gvx") ?? s.x, (s.getData("gvy") ?? s.y) - 2, (g) => {
       g.lineStyle(4, 0xff2e2e, 0.9).strokeEllipse(0, 0, 90, 45);
       g.lineStyle(2, 0xffd24a, 0.9).strokeEllipse(0, 0, 70, 35);
-    });
+    }, s.getData("cx"), s.getData("cy"));
     if (g) {
       g.setBlendMode(Phaser.BlendModes.ADD).setScale(0.3);
       this.tweens.add({ targets: g, scale: 3, alpha: 0, duration: 650, ease: "Quad.easeOut", onComplete: () => g.destroy() });
@@ -3457,7 +3649,7 @@ class Hearth extends Phaser.Scene {
       s.setData("jShadow", shadow);
     }
     const air = lift / Math.max(1, h);
-    shadow.setPosition(gx, gy).setDepth(gy - 1).setVisible(s.visible)
+    shadow.setPosition(gx, gy).setDepth(s.depth - 1).setVisible(s.visible)
       .setScale(1 - 0.35 * air).setAlpha(1 - 0.5 * air);
     return lift;
   }
@@ -3558,6 +3750,128 @@ class Hearth extends Phaser.Scene {
     }
   }
 
+  /**
+   * Sort depth for a server-driven mover (creature, animal) whose sprite lerps to
+   * screen (tx, ty): its screen y, as it has always been, except round a tile
+   * mountain, where it sorts by the ground plane at its eased world position.
+   */
+  private moverDepth(s: Phaser.GameObjects.Sprite, vy: number) {
+    const cx = s.getData("cx"),
+      cy = s.getData("cy");
+    if (cx === undefined || !this.peaks.enabled) return vy;
+    let gw: number[] | undefined = s.getData("gw");
+    if (!gw) s.setData("gw", (gw = [cx, cy]));
+    gw[0] += (cx - gw[0]) * 0.15;
+    gw[1] += (cy - gw[1]) * 0.15;
+    return this.peaks.depthAt(gw[0], gw[1], 0) ?? vy;
+  }
+
+  /** How much of the keeper the mountain in front hides this frame (0..1, peaks.coverAt). */
+  private coverNow = 0;
+
+  /**
+   * Behind a tile mountain the keeper is out of sight — so a soft, pale silhouette of
+   * them is drawn over the terrain, fading in with how much of them is hidden. One
+   * small RenderTexture, redrawn only on frames they are covered.
+   */
+  private updateGhost(footY: number) {
+    this.coverNow = this.z === 0 && this.peaks.enabled ? this.peaks.coverAt(this.px, this.py, footY) : 0;
+    if (this.coverNow < 0.2 || !this.me.visible) {
+      if (this.ghostRT?.visible) this.ghostRT.setVisible(false);
+      return;
+    }
+    const W = 112,
+      H = 112,
+      FOOT = 0.82;
+    if (!this.ghostRT)
+      this.ghostRT = this.add.renderTexture(0, 0, W, H).setOrigin(0.5, FOOT).setDepth(999000).setTintFill(0xeaf3ff);
+    const g = this.ghostRT;
+    g.clear();
+    g.draw(this.me, W / 2 - this.me.x, H * FOOT - this.me.y);
+    g.setPosition(this.me.x, this.me.y)
+      .setAlpha(0.22 + 0.3 * Math.min(1, (this.coverNow - 0.2) / 0.5))
+      .setVisible(true);
+  }
+
+  /** A menu or modal over the game: the camera does not peek behind it. */
+  private inMenu() {
+    if (!this.menuEls.length)
+      this.menuEls = ["menu", "invModal", "helpModal"].map((id) => document.getElementById(id)).filter((e): e is HTMLElement => !!e);
+    return this.menuEls.some((e) => e.style.display === "block" || e.style.display === "flex");
+  }
+
+  /**
+   * Height difference ahead of the keeper, for the peek: a rise or drop of 2+ levels
+   * within two tiles in the way they walk. Single-level terraces never count, so
+   * rolling ground does not set the camera swinging. Four tile reads; (wx, wy) is the
+   * world-space direction of travel.
+   */
+  private heightAhead(wx: number, wy: number) {
+    const e0 = this.elevAt(this.px, this.py);
+    const at = (x: number, y: number) =>
+      this.world.loadedAt(x, y) && this.tileAt(x, y) !== T.WATER ? this.elevAt(x, y) : e0;
+    for (const r of [0.6, 1, 1.5, 2]) if (Math.abs(at(this.px + wx * r, this.py + wy * r) - e0) >= 2) return true;
+    return false;
+  }
+
+  /**
+   * Camera peek (the cameraPeek flag, and the player's Settings toggle): while the
+   * keeper is walking behind a tile mountain or over a height difference, the camera's
+   * follow offset leans out ahead of them — along the way they walk on screen, and on
+   * past what hides them — capped at PEEK_MAX screen px whatever the zoom. Once the
+   * trigger stops (they stopped, or it flickered off between tiles) the lean holds
+   * PEEK_HOLD seconds, then eases back to centre. Off in the mines, dead, in a menu, or
+   * with either switch off; switching off mid-lean eases back the same way.
+   */
+  private peekLastX = 0;
+  private peekLastY = 0;
+  private updatePeek(dt: number, dx: number, dy: number) {
+    const cam = this.cameras.main;
+    const on = this.features.cameraPeek && this.peekSetting && this.z === 0 && this.hp > 0 && !this.inMenu();
+    const moved = Math.hypot(this.px - this.peekLastX, this.py - this.peekLastY) > 0.0005;
+    this.peekLastX = this.px;
+    this.peekLastY = this.py;
+    let trig = false;
+    if (on && (dx || dy) && moved) {
+      const l = Math.hypot(dx, dy),
+        kd = 1 - Math.exp(-dt / 0.15);
+      this.peekDirX += (dx / l - this.peekDirX) * kd;
+      this.peekDirY += (dy / l - this.peekDirY) * kd;
+      const wx = (dx + dy) / l,
+        wy = (dy - dx) / l,
+        wl = Math.hypot(wx, wy) || 1;
+      trig = this.coverNow > 0.2 || this.heightAhead(wx / wl, wy / wl);
+    }
+    if (trig) {
+      let tx = this.peekDirX * PEEK_AHEAD,
+        ty = this.peekDirY * PEEK_AHEAD;
+      if (this.coverNow > 0.2) ty -= PEEK_HIDDEN * Math.min(1, this.coverNow * 1.5); // on toward the far side
+      const len = Math.hypot(tx, ty);
+      if (len > PEEK_MAX) {
+        tx *= PEEK_MAX / len;
+        ty *= PEEK_MAX / len;
+      }
+      this.peekTX = tx;
+      this.peekTY = ty;
+      this.peekHold = PEEK_HOLD;
+    } else if (on && this.peekHold > 0) this.peekHold -= dt;
+    else {
+      this.peekHold = 0;
+      this.peekTX = this.peekTY = 0;
+    }
+    const k = 1 - Math.exp(-dt / (this.peekTX || this.peekTY ? PEEK_IN : PEEK_OUT));
+    this.peekX += (this.peekTX - this.peekX) * k;
+    this.peekY += (this.peekTY - this.peekY) * k;
+    if (!this.peekTX && !this.peekTY && Math.abs(this.peekX) < 0.05 && Math.abs(this.peekY) < 0.05) this.peekX = this.peekY = 0;
+    const z = cam.zoom || 1;
+    cam.setFollowOffset(-this.peekX / z, -this.peekY / z);
+  }
+
+  /** For tests and tools: the camera peek's current lean, screen px. */
+  get peek() {
+    return { x: this.peekX, y: this.peekY, cover: this.coverNow };
+  }
+
   update(t: number, dtMs: number) {
     this.dev.update(t);
     if (!this.ready) return;
@@ -3625,8 +3939,12 @@ class Hearth extends Phaser.Scene {
     if (this.z !== 0)
       p.y += 16; // stand on the flat interior/cave floor
     else if (this.swimming) p.y += 12; // swimming: sink to head level
-    this.me.setPosition(p.x, p.y).setDepth(p.y);
+    // surface depth through depthAt (ground-plane round a tile mountain, else p.y as ever)
+    this.me.setPosition(p.x, p.y).setDepth(this.z !== 0 ? p.y : this.depthAt(this.px, this.py, this.swimming ? 12 : 0));
     this.ensureChunks();
+    this.peaks.update(this.cameras.main.worldView);
+    this.updateGhost(p.y);
+    this.updatePeek(dt, dx, dy);
     this.updateVegetationSway(dt);
     this.updateFlicker(dt);
 
@@ -3739,8 +4057,16 @@ class Hearth extends Phaser.Scene {
         o.rig.faceDir(o.tx - o.rig.x, o.ty - o.rig.y);
         o.rig.x += (o.tx - o.rig.x) * 0.18;
         o.rig.y += (o.ty - o.rig.y) * 0.18;
-        o.rig.setDepth(o.rig.y);
       }
+      // the world position the rig is lerping toward, eased the same way, for its sort
+      // depth round a tile mountain (peaks.ts); anywhere else it sorts by screen y as ever
+      const gw = o.rig.getData("gw") ?? [o.wx, o.wy];
+      gw[0] += (o.wx - gw[0]) * 0.18;
+      gw[1] += (o.wy - gw[1]) * 0.18;
+      o.rig.setData("gw", gw);
+      const od = o.z === 0 ? this.peaks.depthAt(gw[0], gw[1], 0) : null;
+      if (od !== null) o.rig.setDepth(od);
+      else if (d > 0.5) o.rig.setDepth(o.rig.y);
       o.rig.tick(dt);
       // Task 5: update other player labels
       o.label.setPosition(o.rig.x, o.rig.y - 58).setDepth(o.rig.depth + 1);
@@ -3767,16 +4093,16 @@ class Hearth extends Phaser.Scene {
       const off = s.getData("off");
       s.x = vx + (off ? off.x : 0);
       s.y = vy + (s.getData("gHoverY") || 0) - lift + (off ? off.y - off.h : 0);
-      s.setDepth(vy);
+      s.setDepth(this.moverDepth(s, vy));
       // level badge / alpha glow ride the sprite (baked Images, moved here; nothing redrawn)
       const bd: Phaser.GameObjects.Image | undefined = s.getData("badge");
       if (bd) {
         if (bd.visible !== s.visible) bd.setVisible(s.visible);
-        bd.setPosition(s.x, s.y - s.displayHeight * 0.9 - 3).setDepth(vy + 2);
+        bd.setPosition(s.x, s.y - s.displayHeight * 0.9 - 3).setDepth(s.depth + 2);
         const gl: Phaser.GameObjects.Image | undefined = s.getData("glow");
         if (gl) {
           if (gl.visible !== s.visible) gl.setVisible(s.visible);
-          gl.setPosition(vx, vy - 2).setDepth(vy - 0.5).setAlpha(0.5 + 0.2 * Math.sin((s.getData("gClock") ?? 0) * 2.4));
+          gl.setPosition(vx, vy - 2).setDepth(s.depth - 0.5).setAlpha(0.5 + 0.2 * Math.sin((s.getData("gClock") ?? 0) * 2.4));
         }
       }
     }
@@ -3794,7 +4120,7 @@ class Hearth extends Phaser.Scene {
       tickAnimalGait(s, type, dt, ANI_VIEWS[type]);
       s.x = vx;
       s.y = vy + (s.getData("gHoverY") || 0);
-      s.setDepth(vy);
+      s.setDepth(this.moverDepth(s, vy));
     }
 
     // ghost placement preview — modular first: it uses slot geometry, not recipes
@@ -3827,7 +4153,7 @@ class Hearth extends Phaser.Scene {
         this.modSupported(gi, slot) &&
         !this.structSpr.has(gi) &&
         anchored &&
-        !LANDMARK_BLOCK.has(gi);
+        !this.landmarkBlocked(gi);
       const ok =
         this.z === 0 && free && Math.hypot(g.x - this.px, g.y - this.py) <= 6;
       this.ghost.setTint(ok ? 0x88ff88 : 0xff6666);

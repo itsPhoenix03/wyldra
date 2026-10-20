@@ -1446,3 +1446,12 @@ The expanded map is ready when:
 - Biome-specific assets are correctly placed.
 - Incompatible saves and profile coordinates are automatically rejected/relocated by world version; manual deletion is only a development reset.
 - Worldgen/startup and static-object counts remain within recorded budgets on the target browser/device.
+
+## Tile mountains (Go-only pass)
+
+With `tileMountains` on (default) the five `MOUNTAINS` sites get terrain mountains from
+`gameserver/world/mountains.go`. Like the village camps they are not in shared/world.js, so the
+parity digests and `tools/worldmap/render.mjs` never see them; render them with
+`HEARTH_MOUNTAIN_PNG=<dir> go test ./world -run TestMountainRenders`. The pass keeps every
+tile's type, never covers water, clearings (free/land radii), monoliths, temple pieces or
+medics, and records the base values it replaces so it can be lifted at runtime.

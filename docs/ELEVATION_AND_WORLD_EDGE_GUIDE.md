@@ -289,3 +289,14 @@ complain (SMALL_IMPROVEMENTS workflow).
 6. After every step: `npm run build`, fresh server, `node test.mjs`, two-tab co-op sanity,
    and load a PRE-change save (steps 1–8 must load old saves cleanly; step 9 must refuse
    them via `worldVersion`).
+
+## 9. Tile mountains, elevation up to 12, terrain occlusion
+
+`tileMountains` (room/features.go) stamps mountains onto the room's own copy of the world
+(`gameserver/world/mountains.go`, Go-only): grassy foothills to r~14, compact high ground in
+cliff bands of 2-3 levels, summit +8..+10 (cap `MaxElev` 12), one switchback trail at +1 per
+step. Elev consumers are sized for 12: `drawChunk` pads its bottom by 120 px, `repaintTileBox`
+scans 7 tiles, faces are capped at 3 levels so a fall costs at most 2 hp per ledge.
+Occlusion (`src/peaks.ts`): tall mountain tiles are also baked into one RenderTexture per iso
+row; inside a mountain region sprites sort by ground plane (`depthAt`). Elsewhere, and with the
+flag off, depth is exactly the old lifted model. A hidden keeper gets a pale silhouette.

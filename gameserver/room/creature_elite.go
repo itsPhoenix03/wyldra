@@ -70,7 +70,7 @@ func (r *Room) panicStep(c *Creature, typ string, baseSp float64) {
 	sp := baseSp * 1.1
 	for _, rot := range [5]float64{0, 35 * eliteDeg, -35 * eliteDeg, 70 * eliteDeg, -70 * eliteDeg} {
 		nx, ny := c.X+math.Cos(ang+rot)*sp, c.Y+math.Sin(ang+rot)*sp
-		if !r.creStepBlocked(ti(nx, ny), canSwim[typ]) {
+		if !r.creStepBlocked(ti(nx, ny), canSwim[typ]) && !r.mtnClimbBlocked(ti(c.X, c.Y), ti(nx, ny)) {
 			c.X, c.Y = nx, ny
 			return
 		}
@@ -262,6 +262,11 @@ func (r *Room) chargeStep(c *Creature, typ string, nowMs int64) {
 		l := math.Min(sub, c.ChargeLen)
 		nx, ny := c.X+cos*l, c.Y+sin*l
 		ni := ti(nx, ny)
+		if r.mtnClimbBlocked(ti(c.X, c.Y), ni) {
+			c.Stun = 5 // ran into a mountain cliff
+			r.endCharge(c)
+			return
+		}
 		if r.creStepBlocked(ni, swims) {
 			s := r.structures[ni]
 			if s != nil && r.creBlocked(ni) {
@@ -371,7 +376,7 @@ func (r *Room) tryDodge(p *Player, c *Creature) (ang float64, ok bool) {
 	swims := canSwim[c.Type]
 	open := func(dx, dy float64) bool {
 		i := ti(c.X+dx, c.Y+dy)
-		return !r.creStepBlocked(i, swims) && r.structures[i] == nil
+		return !r.creStepBlocked(i, swims) && r.structures[i] == nil && !r.mtnClimbBlocked(ti(c.X, c.Y), i)
 	}
 	hx, hy := -uy, ux
 	left, right := open(hx, hy), open(-hx, -hy)

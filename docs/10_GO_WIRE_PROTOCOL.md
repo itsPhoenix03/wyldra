@@ -1237,3 +1237,21 @@ and drowned 4 at every level). Pack call and alpha reach 12 tiles. Followers —
 alpha, stalkers of a stalker alpha, crawlers of a crawler or brute alpha — hunt the alpha's prey
 within 26 tiles and run 10% faster near it. A struck alpha enrages them for 60 ticks (at most
 every 25); a slain one panics them for 15.
+
+## 14. Feature flags and the tile mountains
+
+Per-room switches held by the server (`gameserver/room/features.go`). Precedence: the room's
+save (`features`) > the world's registry entry (`"features": {"tileMountains": false}`) >
+`HEARTH_FEATURES` (`tileMountains=0,cameraPeek=1`) > the registry default. A save with no
+`features` loads with the defaults.
+
+| flag | default | effect |
+|---|---|---|
+| `tileMountains` | on | terrain mountains at the five `MOUNTAINS` sites (Go-only, `world/mountains.go`); the sprite mountains hide and their 3x3 `LANDMARK_BLOCK` footprint stops blocking |
+| `cameraPeek` | on | the client camera leans ahead behind mountains and over height changes (also needs the player's Settings toggle) |
+
+- `init.features`: `{tileMountains: bool, cameraPeek: bool}`. A client that gets none (legacy) uses tileMountains=false, cameraPeek=true.
+- `{t:"feat", features:{...}}`: broadcast whenever a flag changes. For a terrain flag the touched chunks follow, re-sent to every player whose push window holds them; everyone else has them marked unsent. A re-sent chunk replaces the earlier copy whole (its `nodes`/`decor` are the full truth).
+- `devcmd {cmd:"feat", name, on}`: dev-claim gated. Unknown `name` gets a `msg`; a non-boolean `on` or a no-op is ignored; a change broadcasts `feat` and toasts the tester.
+- tileVis on mountain tiles (Go-only): 2 rock (cliff edge), 3 ledge, 4 snow rock, 5 snow ledge, 6 trail. Foothill tiles keep their base 0/1. `elev` reaches 12 (`world.MaxElev`); the RLE is byte-valued, so the encoding is unchanged.
+- Creatures and animals may not climb more than +1 onto or off a mountain tile, and nothing spawns on a mountain face. Players climb by the usual rules (+1, +2 jumping).
