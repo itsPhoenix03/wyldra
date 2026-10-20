@@ -1,5 +1,18 @@
 # Terrain handoff: tile mountains, feature flags, peek camera
 
+> **Status: complete.** `tileMountains` now ships **on** by default (`gameserver/room/features.go`), and the `init()` override in `room/features_test.go` is gone. What §4 asked for is done:
+> - **Shape:** `MaxElev` 32, Spire peak 28, faces of at most 4, cairns and full-turn trails (`gameserver/world/mountains.go`).
+> - **Rock faces:** a mountain tile's levels under its top are drawn with `mtn_<isle>_<rock|snow>_face{,2,3,4}`, with `_strata` on a few levels (`tools/art/mountain-faces.mjs`, picked by `src/peaks.ts` `faceAt`). The same faces are used in `drawChunk`, `repaintTileBox` and the strips.
+> - **32-level elevation audit (`src/tiles.ts` `MAX_ELEV`):** chunk bake pad 310 + 80 px, `repaintTileBox` reach ±12, strip bake budgeted in draws, `coverAt` looks as far ahead as the region's peak.
+> - **Silhouette:** fixed. It was drawn off its texture.
+> - **Verified in game** on a throwaway stack:
+>   - Woods, Dunes and Spire with the flag on, and off (flat ground plus sprite mountains), toggled live;
+>   - the Woods trail walked by key input from foot to summit (elev 25), with no snapbacks and no damage;
+>   - the keeper hidden behind the Spire, with the silhouette showing.
+> - **Suites:** `go vet` and `go test ./...`, `test-go.mjs` (its fall-damage cliff now avoids the mountains), `smoke.mjs` (now mountain-aware: terrain may differ only inside the stamps), `PARITY OK`, tsc, vite build.
+>
+> Not checked: the camera peek offsets, depth sort at the foot in detail, `test-multiworld`. Faint chunk-edge lines at zoom 0.55 are there with the flag off as well. The sections below are the history.
+
 The status of the terrain work on branch `feat/tile-mountains`, and what is left to do. It is written so any agent (Claude, Codex, …) can pick it up cold. Read it top to bottom before touching code.
 
 ## 0. What the owner asked for (verbatim)

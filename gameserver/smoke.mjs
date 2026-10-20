@@ -17,7 +17,7 @@
 // Exit code 0 means every assertion passed.
 
 import WebSocket from 'ws';
-import { genWorld, findSpawn, SIZE, T, WORLD_VERSION } from '../shared/world.js';
+import { genWorld, findSpawn, SIZE, T, WORLD_VERSION, MOUNTAINS } from '../shared/world.js';
 
 const CONTROL = process.env.HEARTH_CONTROL_URL || 'http://localhost:8090';
 const SEED = process.env.HEARTH_SEED || 'hearth-1';
@@ -184,7 +184,11 @@ async function main() {
   const wireVeins = world.veins.map((v, i) => (world.tiles[i] === T.WATER ? 0 : v));
   const LAYERS = [['tiles', world.tiles], ['elev', world.elev], ['veins', wireVeins],
                   ['waterTemp', world.waterTemp], ['tileVis', world.tileVis]];
-  let sampled = 0, mismatches = 0;
+  // The tile mountains (the tileMountains feature, on by default) are a Go-only stamp over
+  // genWorld round each MOUNTAINS site (gameserver/world/mountains.go): there the streamed
+  // ground may differ, and anywhere else it must not.
+  const inStamp = (x, y) => MOUNTAINS.some((mt) => Math.max(Math.abs(x - mt.x), Math.abs(y - mt.y)) <= 34);
+  let sampled = 0, mismatches = 0, stamped = 0;
   let totalB64 = 0;
   for (const key of expected) {
     const m = chunks.get(key);
@@ -205,39 +209,40 @@ async function main() {
         const wx = m.cx * CHUNK + (local % CHUNK);
         const wy = m.cy * CHUNK + Math.floor(local / CHUNK);
         sampled++;
-        if (decoded[local] !== expectArr[wy * SIZE + wx]) {
+        if (decoded[local] !== expectArr[wy * SIZE + wx] && inStamp(wx, wy)) stamped++;
+        else if (decoded[local] !== expectArr[wy * SIZE + wx]) {
           if (mismatches < 5) console.error(`  FAIL chunk ${key} ${layerName} local ${local} -> world (${wx},${wy}): got ${decoded[local]}, want ${expectArr[wy * SIZE + wx]}`);
           mismatches++;
         }
       }
     }
   }
-  ok(mismatches === 0, `${sampled} sampled tiles across 5 layers x ${expected.length} chunks match genWorld('${SEED}')`);
+  ok(mismatches === 0, `${sampled} sampled tiles across 5 layers x ${expected.length} chunks match genWorld('${SEED}') outside the mountain stamps`);
+  if (stamped) console.log(`  info ${stamped} sampled tiles differ inside a mountain stamp (tileMountains)`);
 
   // Sparse overlays must map back to the same world too.
-  let nodeChecks = 0, nodeBad = 0;
+  let nodeChecks = 0, nodeBad = 0, nodeStamped = 0;
+  const nodeOk = (wx, wy, same) => { nodeChecks++; if (same) return; if (inStamp(wx, wy)) nodeStamped++; else nodeBad++; };
   for (const key of expected) {
     const m = chunks.get(key);
     for (const [local, kind] of (m.nodes || [])) {
       const wx = m.cx * CHUNK + (local % CHUNK);
       const wy = m.cy * CHUNK + Math.floor(local / CHUNK);
-      nodeChecks++;
-      if (world.nodes.get(wy * SIZE + wx) !== kind) nodeBad++;
+      nodeOk(wx, wy, world.nodes.get(wy * SIZE + wx) === kind);
     }
     for (const local of (m.bergs || [])) {
       const wx = m.cx * CHUNK + (local % CHUNK);
       const wy = m.cy * CHUNK + Math.floor(local / CHUNK);
-      nodeChecks++;
-      if (!world.bergs.has(wy * SIZE + wx)) nodeBad++;
+      nodeOk(wx, wy, world.bergs.has(wy * SIZE + wx));
     }
     for (const [local, dkey] of (m.decor || [])) {
       const wx = m.cx * CHUNK + (local % CHUNK);
       const wy = m.cy * CHUNK + Math.floor(local / CHUNK);
-      nodeChecks++;
-      if (world.decor.get(wy * SIZE + wx) !== dkey) nodeBad++;
+      nodeOk(wx, wy, world.decor.get(wy * SIZE + wx) === dkey);
     }
   }
-  ok(nodeBad === 0, `${nodeChecks} streamed nodes/decor/bergs match the generated world`);
+  ok(nodeBad === 0, `${nodeChecks} streamed nodes/decor/bergs match the generated world outside the mountain stamps`);
+  if (nodeStamped) console.log(`  info ${nodeStamped} streamed nodes/decor differ inside a mountain stamp (tileMountains)`);
   console.log(`  info base64 payload for the ${expected.length}-chunk join burst: ${(totalB64 / 1024).toFixed(1)} KiB ` +
               `(raw would be ${((expected.length * 5 * 4096) / 1024).toFixed(1)} KiB)`);
 

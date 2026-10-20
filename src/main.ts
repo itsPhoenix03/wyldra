@@ -38,8 +38,8 @@ import { DevOverlay } from "./devOverlay.ts";
 import { KeeperVoice } from "./keeperVoice.ts";
 import { pickView, viewKey, type View } from "./facing.ts";
 import { ROTATABLE_MODS, facing, facingCount } from "./rotation.ts";
-import { TileStore, UNLOADED, CHUNK, type ChunkMsg } from "./tiles.ts";
-import { MountainView, type PeakHost } from "./peaks.ts";
+import { TileStore, UNLOADED, CHUNK, MAX_ELEV, type ChunkMsg } from "./tiles.ts";
+import { MountainView, faceAt, mountainFaces, stratumAt, type PeakHost } from "./peaks.ts";
 import { LEGACY, LEGACY_WS_PORT, takeJoin, identityToken } from "./net.ts";
 
 const TW = 64,
@@ -678,7 +678,9 @@ class Hearth extends Phaser.Scene {
     d.id = "devPanel";
     d.style.cssText =
       "position:fixed;top:8px;right:8px;z-index:30;display:none;background:rgba(10,15,20,.95);" +
-      "border:1px solid #b96;border-radius:8px;padding:10px 12px;color:#fff;font:12px monospace;max-width:220px;";
+      "border:1px solid #b96;border-radius:8px;padding:10px 12px;color:#fff;font:12px monospace;max-width:220px;" +
+      // fit the screen and scroll inside: the panel outgrew short viewports (zoomed by --uiz, so divide it out)
+      "box-sizing:border-box;max-height:calc((100vh - 16px) / var(--uiz, 1));overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#57a transparent;";
     d.innerHTML =
       `<b style="color:#ffb96a">🛠 DEV TESTER</b> <span style="color:#889">(F10)</span><br>` +
       // Shown instead of the controls when this session has no dev claim, so the panel
@@ -1350,10 +1352,11 @@ class Hearth extends Phaser.Scene {
       .setOrigin(0)
       .setDepth(-1)
       .setAlpha(this.z !== 0 ? 0.15 : 1);
-    // padB: a tile stack rises up to (12 - 1) levels of 10px (gameserver/world/mountains.go
-    // MaxElev), so a tile whose foot is that far below the chunk still reaches into it
+    // padB: a tile stack rises up to MAX_ELEV - 1 levels of 10px (the tile mountains), so a
+    // tile whose foot is that far below the chunk still reaches into it. Only the tall ones
+    // do: a tile whose whole stack is below the chunk is skipped.
     const pad = 80,
-      padB = pad + 120,
+      padB = pad + (MAX_ELEV - 1) * 10,
       rx = cx * CHW,
       ry = cy * CHH;
     const inv = (sx: number, sy: number) => ({
@@ -1391,14 +1394,33 @@ class Hearth extends Phaser.Scene {
         const key = this.tileKey(i);
         if (!key) continue; // chunk not streamed in yet: leave the void empty
         const e = Math.max(1, this.world.elev[i]);
-        for (let l = 0; l < e; l++)
-          rt.batchDraw(key, p.x - TW / 2 - rx, p.y - l * 10 - ry); // stacked skirts form cliffs
+        if (p.y - (e - 1) * 10 >= ry + CHH) continue; // the whole stack is below the chunk
+        this.drawStack(rt, key, x, y, e, p.x - TW / 2 - rx, p.y - ry); // stacked skirts form cliffs
         // ledge lips on the top face, in draw order so tiles in front still cover them
         if (key !== "water" && !key.startsWith("water_"))
           for (const lip of this.lipsAt(x, y)) rt.batchDraw(lip, p.x - TW / 2 - rx, p.y - (e - 1) * 10 - ry);
       }
     rt.endDraw();
     return rt;
+  }
+
+  /**
+   * One tile's stack into a texture being drawn, level 0's top-left at (left, top) and
+   * each level 10 px over the last. A tile mountain's levels under its top are rock face
+   * (peaks.ts faceAt), with a stratum on a few of them, so a cliff reads as one rock
+   * rather than a pile of tiles; every other tile stacks itself, as it always has.
+   * drawChunk, repaintTileBox and the strips (peaks.ts bake) all draw the same levels.
+   */
+  private drawStack(rt: Phaser.GameObjects.RenderTexture, key: string, x: number, y: number, e: number, left: number, top: number) {
+    const faces = mountainFaces(this.textures, key);
+    for (let l = 0; l < e; l++) {
+      if (!faces || l === e - 1) {
+        rt.batchDraw(key, left, top - l * 10);
+        continue;
+      }
+      rt.batchDraw(faceAt(faces, x, y, l), left, top - l * 10);
+      if (stratumAt(l)) rt.batchDraw(faces[4], left, top - l * 10);
+    }
   }
 
   // change a tile (mud / infection / cure) and repaint it on any loaded chunks
@@ -1429,10 +1451,13 @@ class Hearth extends Phaser.Scene {
       bh = Math.ceil(p0.y + TILE_H - by);
     const scratch = this.make.renderTexture({ width: bw, height: bh }, false).setOrigin(0); // stamped by its top-left corner
     scratch.beginDraw();
-    // a tile stack reaches at most 12 levels (110 px, the tile mountains): 7 tiles either
-    // way covers every stack that overlaps the box, in front of it or behind
-    for (let ty = y - 7; ty <= y + 7; ty++)
-      for (let tx = x - 7; tx <= x + 7; tx++) {
+    // a stack rises at most (MAX_ELEV - 1) * 10 px (310, the tile mountains) over its 40 px
+    // tile, so a stack overlapping the box is within (310 + 40) / 16 = 22 rows of it, in
+    // front or behind, and in the box's own column or the two beside it: 12 tiles either
+    // way covers them all (the column test skips the rest at once)
+    const R = Math.ceil(((MAX_ELEV - 1) * 10 + TILE_H) / (TH / 2) / 2) + 1;
+    for (let ty = y - R; ty <= y + R; ty++)
+      for (let tx = x - R; tx <= x + R; tx++) {
         const p = this.iso(tx, ty);
         const left = p.x - TW / 2;
         if (left >= bx + bw || left + TW <= bx) continue;
@@ -1445,7 +1470,7 @@ class Hearth extends Phaser.Scene {
         if (!kk) continue;
         const e = Math.max(1, this.world.elev[ii]);
         if (p.y - (e - 1) * 10 >= by + bh || p.y + TILE_H <= by) continue;
-        for (let l = 0; l < e; l++) scratch.batchDraw(kk, left - bx, p.y - l * 10 - by);
+        this.drawStack(scratch, kk, tx, ty, e, left - bx, p.y - by);
         if (kk !== "water" && !kk.startsWith("water_"))
           for (const lip of this.lipsAt(tx, ty)) scratch.batchDraw(lip, left - bx, p.y - (e - 1) * 10 - by);
       }
@@ -3787,7 +3812,9 @@ class Hearth extends Phaser.Scene {
       this.ghostRT = this.add.renderTexture(0, 0, W, H).setOrigin(0.5, FOOT).setDepth(999000).setTintFill(0xeaf3ff);
     const g = this.ghostRT;
     g.clear();
-    g.draw(this.me, W / 2 - this.me.x, H * FOOT - this.me.y);
+    // draw() puts a single Game Object AT (x, y) in the texture (DynamicTexture.batchGameObject),
+    // not at its own position plus (x, y): an offset here drew the keeper far off the texture
+    g.draw(this.me, W / 2, H * FOOT);
     g.setPosition(this.me.x, this.me.y)
       .setAlpha(0.22 + 0.3 * Math.min(1, (this.coverNow - 0.2) / 0.5))
       .setVisible(true);

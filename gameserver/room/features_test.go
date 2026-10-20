@@ -357,13 +357,3 @@ func TestNothingSpawnsOnMountainFaces(t *testing.T) {
 		}
 	}
 }
-
-// The room tests run with tileMountains on (it ships off while the mountains
-// are reworked, docs/TERRAIN_HANDOFF.md), so the stamp stays covered.
-func init() {
-	for i := range featureDefs {
-		if featureDefs[i].Name == "tileMountains" {
-			featureDefs[i].Default = true
-		}
-	}
-}

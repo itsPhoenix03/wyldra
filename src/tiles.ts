@@ -19,6 +19,14 @@ export const CHUNK_GRID = SIZE / CHUNK;
 export const CHUNK_TILES = CHUNK * CHUNK;
 
 /**
+ * The tallest tile stack the renderer leaves room for: gameserver/world/mountains.go
+ * MaxElev, the tile mountains. A stack of e levels rises (e - 1) * 10 px over its foot,
+ * so the chunk bake's bottom pad, repaintTileBox's reach and the strips' sight lines
+ * (src/peaks.ts) are all sized from this. Ordinary ground stays at 1..3.
+ */
+export const MAX_ELEV = 32;
+
+/**
  * Sentinel tile value for "this tile has not been streamed yet". Real tile types are
  * 0..5 (see T in shared/world.js), so 255 can never collide. It is distinct from
  * T.WATER on purpose: water is walkable, and painting the void as ocean would invite the

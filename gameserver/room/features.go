@@ -39,7 +39,7 @@ type featureDef struct {
 
 // featureDefs is the registry, in the order the tester panel lists them.
 var featureDefs = []featureDef{
-	{"tileMountains", false, "Mountains built from stacked tiles at the five mountain sites (gameserver/world/mountains.go), instead of the sprite mountains", true},
+	{"tileMountains", true, "Mountains built from stacked tiles at the five mountain sites (gameserver/world/mountains.go), instead of the sprite mountains", true},
 	{"cameraPeek", true, "The camera leans toward hidden ground and height changes while the keeper moves (each player can also turn it off in Settings)", false},
 }
 

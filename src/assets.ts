@@ -166,6 +166,7 @@ _manifest.push(
   ['mtn_core_rock',       '/tiles/mtn_core_rock.svg',       64, 40],
   ['mtn_core_ledge',      '/tiles/mtn_core_ledge.svg',      64, 40],
   ['mtn_core_trail',      '/tiles/mtn_core_trail.svg',      64, 40],
+  // (their rock faces are added after this list)
   // --- decor & farming sprites ---
   ['farmplot',       '/sprites/farmplot.svg',                          64, 40],
   ['crop',           '/sprites/crop.svg',                              30, 34],
@@ -175,6 +176,14 @@ _manifest.push(
   ['mod_railing',    '/sprites/building_materials/mod_railing.svg',    64, 38],
   ['cloth_roll',     '/sprites/building_materials/cloth_roll.svg',     50, 36],
 );
+
+// --- tile mountain rock faces (tools/art/mountain-faces.mjs): the levels under a mountain
+// tile's top. Four seamless 10px bands of one cliff and a strata overlay per island rock,
+// and per snow cap on the Woods and the Spire; src/peaks.ts mountainFaces picks them. ---
+for (const isle of ['woods', 'dunes', 'spire', 'marsh', 'core'])
+  for (const kind of isle === 'woods' || isle === 'spire' ? ['rock', 'snow'] : ['rock'])
+    for (const f of ['face', 'face2', 'face3', 'face4', 'strata'])
+      _manifest.push([`mtn_${isle}_${kind}_${f}`, `/tiles/mtn_${isle}_${kind}_${f}.svg`, 64, 40]);
 
 // --- remaining staged assets (registered so future wiring can never hit a missing texture) ---
 _manifest.push(

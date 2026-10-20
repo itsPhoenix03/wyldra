@@ -31,7 +31,7 @@
 
 import WebSocket from 'ws';
 import { createPrivateKey, sign as edSign } from 'node:crypto';
-import { genWorld, findMedicSpawns, medicBlockTiles, SIZE, T, MONOLITHS, CORE } from '../shared/world.js';
+import { genWorld, findMedicSpawns, medicBlockTiles, SIZE, T, MONOLITHS, CORE, MOUNTAINS } from '../shared/world.js';
 import { NODE, MAX_HP, MEDICINE_HEAL } from '../shared/defs.js';
 
 const CONTROL = process.env.HEARTH_CONTROL_URL || 'http://localhost:8090';
@@ -346,10 +346,14 @@ A.send({ t: 'torch' });
 const tm = await A.wait('torch');
 console.log('torch placed underground OK at tile', tm.i);
 
-// fall damage: step off a 2+ level cliff
+// fall damage: step off a 2+ level cliff. Not round a mountain site: genWorld knows nothing of
+// the tile mountains (a Go-only stamp, gameserver/world/mountains.go, on by default), whose
+// faces drop up to 4 levels, so a fall there costs more than the 1 hp the stages below count on.
+const nearMountain = (x, y) => MOUNTAINS.some((m) => Math.max(Math.abs(x - m.x), Math.abs(y - m.y)) <= 34);
 let cliff = null;
 outer: for (let y = 115; y < 245; y++)
   for (let x = 115; x < 245; x++) {
+    if (nearMountain(x, y)) continue;
     const a = y * SIZE + x, b = y * SIZE + x + 1;
     if (world.tiles[a] !== 4 && world.tiles[b] !== 4 && world.elev[a] - world.elev[b] >= 2) { cliff = [x, y]; break outer; }
   }
