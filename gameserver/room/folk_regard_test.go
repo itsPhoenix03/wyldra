@@ -20,7 +20,8 @@ func woodsVillage(t *testing.T, f *fixture) *village {
 }
 
 // A creature at the village's edge sends the WHOLE village in — not only those
-// within folkThreatR of it — and they stay in until it is gone.
+// within folkThreatR of it — and they stay in until it is gone; all but its
+// guards, who stand between it and the huts facing it (folk.go folkGuard).
 func TestVillageAlarmSendsEveryoneIn(t *testing.T) {
 	f := newFixture(t)
 	v := woodsVillage(t, f)
@@ -37,11 +38,19 @@ func TestVillageAlarmSendsEveryoneIn(t *testing.T) {
 	for k := 0; k < 200; k++ {
 		f.r.folkTick()
 	}
+	guards := 0
 	for _, fk := range v.members {
+		if fk.state == fsGuard {
+			guards++
+			continue
+		}
 		if fk.state != fsHidden {
 			t.Fatalf("%s (%s) is %q, not hidden, with a crawler %.1f tiles from the fire",
 				fk.ID, fk.Kind, fk.Act, math.Hypot(c.X-v.fx, c.Y-v.fy))
 		}
+	}
+	if guards == 0 || guards > folkMaxGuards {
+		t.Fatalf("%d guards stood out against the crawler, want 1..%d", guards, folkMaxGuards)
 	}
 	// gone: they come back out once the all-clear has held
 	f.r.delCreature(c.ID)

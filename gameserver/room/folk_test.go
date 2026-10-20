@@ -130,11 +130,9 @@ func TestFolkDay(t *testing.T) {
 	seen := map[string]bool{}
 	mark := func(what string) { seen[what] = true }
 	var upAt10, upAt14, hiddenAtDusk, outAtDusk, mealSit, mealUp int
-	// Start in the night, as a real dawn does: everyone walks home from their seat
-	// at the fire and turns in (folkGoingTk ticks at most) before the first wakes.
-	// Starting at dawn instead leaves the late risers still walking home at 0.10
-	// whenever the huts stand on a full ring round the fire, 4-10 tiles from the seats.
-	for f.r.time = 0; f.r.time < NightStart; f.r.time += step {
+	// From first light: those not up yet walk home from their seat at the fire
+	// (folk_nav.go routes them, so they are in long before the first wakes).
+	for f.r.time = NightEnd; f.r.time < NightStart; f.r.time += step {
 		f.r.folkTick()
 		tm := f.r.time
 		for _, fk := range f.r.folk {
@@ -251,7 +249,8 @@ func TestFolkFleeHideAndReturn(t *testing.T) {
 	}
 }
 
-// At night the folk turn in; the watcher keeps the fire.
+// At night the folk turn in; the watch on duty keeps the village, each with a
+// light, and everyone else — the off-duty watch too — sleeps.
 func TestFolkTurnInAtNight(t *testing.T) {
 	f := newFixture(t)
 	f.setNight()
@@ -259,12 +258,25 @@ func TestFolkTurnInAtNight(t *testing.T) {
 	for k := 0; k < 300; k++ {
 		f.r.folkTick()
 	}
+	onWatch := map[string]int{}
 	for _, fk := range f.r.folk {
-		if fk.watcher && fk.state == fsHidden {
-			t.Fatalf("%s (watcher) went to bed", fk.Kind)
+		duty := f.r.onDuty(fk, f.r.time)
+		if duty && fk.state == fsHidden {
+			t.Fatalf("%s on watch went to bed", fk.ID)
 		}
-		if !fk.watcher && fk.state != fsHidden {
-			t.Fatalf("%s still out at night (act %s)", fk.Kind, fk.Act)
+		if !duty && fk.state != fsHidden {
+			t.Fatalf("%s %s still out at night (act %s)", fk.ID, fk.Kind, fk.Act)
+		}
+		if duty {
+			onWatch[fk.vil.isle]++
+			if fk.Item != "torch" {
+				t.Fatalf("%s keeps the watch without a light (item %q)", fk.ID, fk.Item)
+			}
+		}
+	}
+	for _, v := range f.r.villages {
+		if onWatch[v.isle] == 0 {
+			t.Fatalf("%s: nobody keeps the watch", v.isle)
 		}
 	}
 }
@@ -329,7 +341,7 @@ func TestFolkOnTheWire(t *testing.T) {
 		t.Fatalf("cre frame radius %v, want %v", m["r"], InterestRadius)
 	}
 	row := fl[0].([]any)
-	if len(row) != 6 || row[0] != f.r.folk[0].ID || row[3] != f.r.folk[0].Kind {
+	if len(row) != 7 || row[0] != f.r.folk[0].ID || row[3] != f.r.folk[0].Kind || row[6] != nil {
 		t.Fatalf("folk row shape: %#v", row)
 	}
 	if len(f.r.campsWire()) != len(f.r.camps) {

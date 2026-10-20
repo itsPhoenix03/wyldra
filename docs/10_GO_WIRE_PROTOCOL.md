@@ -425,7 +425,7 @@ Sent once per tick to each player whenever at least one player is connected:
   "t": "cre",
   "c": [ ["c12", 640.25, 641.00, "crawler"] ],   // id, x, y, type
   "a": [ ["a3", 182.50, 179.75, "deer"] ],       // id, x, y, species
-  "f": [ ["camp-woods-0", 174.12, 188.40, "villager", "walk"] ], // §13 — id, x, y, kind, act
+  "f": [ ["camp-woods-0-1", 174.12, 188.40, "villager", "carry", null, "wood"] ], // §13 — id, x, y, kind, act, face, item
   "time": 0.3141, "day": 2,
   "r": 40                                        // §9.2.1 interest radius, tiles
 }
@@ -1064,9 +1064,19 @@ of the hut stays open. `camps` rides `init` (§3) whole, like `medics`.
 Each camp has a fixed roster (Woods: `villager`, `villager2`, `woods_child`;
 Dunes: `ashmark_hunter`, `villager2`; Marsh: `elder_yvenne`, `villager`). Folk are
 server-simulated, cannot be attacked, and ride every `cre` frame as
-`f: [id, x, y, kind, act]` (positions are tile-centre floats, 2 dp). `act` is one
-of `idle`, `walk`, `run`, `shun`, `shelter`, `talk`, `scold`, `sit`, `collect`, `build`, `craft`, `hide`
-(and the routine acts of §13.3; `shun` and `scold` are §13.4, `shelter` §13.5):
+`f: [id, x, y, kind, act, face, item]` (positions are tile-centre floats, 2 dp; ids are
+`<campId>-<k>`). `act` is one of `idle`, `walk`, `run`, `play`, `carry`, `talk`, `chat`, `speak`,
+`listen`, `watch`, `wave`, `call`, `sit`, `collect`, `build`, `craft`, `cook`, `tend`, `guard`,
+`cheer`, `dance`, `hide`, `shun`, `shelter`, `scold` (`shun`/`scold` §13.4, `shelter` §13.5).
+`face` is whole world degrees while at something, or null. `item` (7th, optional, appended) is
+what they carry — `wood`, `stone`, `fish`, `game`, `herbs`, `berries`, `reeds`, `water`, `torch`
+(the night watch's light) — or null; always null while `hide`. Clients that read only six fields
+keep working. The routine (gameserver/room/folk*.go): A* routes over a per-village grid (±1 level
+a step, round huts, nodes, water and keepers' builds), utility-chosen work by role, needs and
+personality, daily duties (stoking, the cook's `call`, the elder's `speak` with the rest
+`listen`ing), hunters out in pairs, a rotating night watch, a feast (`cheer`/`dance`) the evening
+after a monolith is lit, and `guard`s (hunters, the watch, builders) standing between a creature
+and the huts facing it while the rest hide:
 
 - By day they wander the yard, work, sit at the fire, and stop and `talk` to a
   surface player within 2.4 tiles. What they say is client-side flavour.
@@ -1075,8 +1085,8 @@ of `idle`, `walk`, `run`, `shun`, `shelter`, `talk`, `scold`, `sit`, `collect`, 
   to creatures. They come back out once nothing is within 10 tiles of them and
   nothing within 18 of the fire, for 15 ticks. The fire rule is the village alarm:
   without it, folk on the far side of the village sat on while their neighbours fled.
-- At night everyone but the camp's watcher (the hunter, the elder) turns in
-  (`hide`); the watcher sits by the fire until something comes for it.
+- At night everyone but the watch on duty turns in (`hide`); the watch (a roster per village,
+  three shifts a night, turning nightly) keeps the edge and the fire with a `torch`.
 
 ### 13.3 Creature AI on top of the legacy port
 
