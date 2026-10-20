@@ -104,7 +104,7 @@ func (r *Room) animalSpawnTick() {
 		i := ti(x, y)
 		_, isNode := r.world.Nodes[i]
 		_, isStruct := r.structures[i]
-		if r.world.Tiles[i] == at.home && !isNode && !isStruct {
+		if r.world.Tiles[i] == at.home && !isNode && !isStruct && !r.onMountainFace(x, y) {
 			r.nextAni++
 			r.addAnimal(&Animal{
 				ID: "a" + itoa(r.nextAni), X: x, Y: y, HP: at.hp,
@@ -151,7 +151,7 @@ func (r *Room) animalTick() {
 			sp = at.fleeSp
 		}
 		nx, ny := a.X+a.DX*sp, a.Y+a.DY*sp
-		if !r.blockedTile(nx, ny) && r.tileAtXY(nx, ny) == a.Home {
+		if !r.blockedTile(nx, ny) && r.tileAtXY(nx, ny) == a.Home && !r.mtnClimbBlocked(ti(a.X, a.Y), ti(nx, ny)) {
 			a.X, a.Y = nx, ny
 		} else {
 			a.DX, a.DY = -a.DX, -a.DY

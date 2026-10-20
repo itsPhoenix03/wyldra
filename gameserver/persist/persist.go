@@ -108,6 +108,11 @@ type Snapshot struct {
 	Farms       map[string]*Farm          `json:"farms,omitempty"`
 	ChestInv    map[string]map[string]int `json:"chestInv,omitempty"`
 	Modules     map[string]*Module        `json:"modules,omitempty"`
+
+	// Features is the room's feature flags as they stood (room/features.go),
+	// by name. Absent — every save written before flags existed — means the
+	// configured defaults, so an old save loads exactly as it always did.
+	Features map[string]bool `json:"features,omitempty"`
 }
 
 // Store is the persistence seam. Implementations must be safe to call from the

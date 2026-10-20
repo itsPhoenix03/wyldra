@@ -251,6 +251,10 @@ func (r *Room) handleDevCmd(p *Player, m map[string]any) {
 		r.broadcast(map[string]any{"t": "monoreset"})
 		r.send(p, map[string]any{"t": "msg", "s": fmt.Sprintf("\U0001F5FF Monoliths reset — all four dormant (%d were lit)", n)})
 
+	case "feat":
+		// a feature flag switch from the tester panel's "Feature flags" section
+		r.handleFeatCmd(p, m)
+
 	case "kill":
 		p.God = false
 		p.HP, p.Z = r.defs.MaxHP, 0
@@ -276,7 +280,7 @@ func (r *Room) devSpot(x, y float64, wantWater bool, rmin, rmax float64) (float6
 			continue
 		}
 		i := ti(cx, cy)
-		if wantWater == (r.world.Tiles[i] == world.TWater) && (wantWater || !r.creStepBlocked(i, false)) {
+		if wantWater == (r.world.Tiles[i] == world.TWater) && (wantWater || !r.creStepBlocked(i, false)) && !r.onMountainFace(cx, cy) {
 			return cx, cy, true
 		}
 	}

@@ -263,7 +263,15 @@ func TestPosRejectsCollisionWithWorldBlockers(t *testing.T) {
 		t.Fatalf("%s: found no testable blocked tile", name)
 	}
 
-	tryStepInto("landmark", world.LandmarkBlock)
+	// the landmark tiles that still block: with the tile mountains up only the
+	// temple pieces do (the mountains' own cliffs are the obstacle there)
+	landmarks := map[int]bool{}
+	for i := range world.LandmarkBlock {
+		if f.r.landmarkBlocks(i) {
+			landmarks[i] = true
+		}
+	}
+	tryStepInto("landmark", landmarks)
 	tryStepInto("medic", f.r.medicTiles)
 }
 
@@ -276,6 +284,8 @@ func TestPosBlockedJumpBound(t *testing.T) {
 	}
 	clone := *sharedWorld
 	clone.Elev = append([]uint8(nil), sharedWorld.Elev...)
+	// (the room stamps its terrain features on a copy of its own, so the
+	// carving below writes r.world, not the clone)
 	r, err := New(Config{Seed: "hearth-1", World: &clone})
 	if err != nil {
 		t.Fatal(err)
@@ -288,15 +298,15 @@ func TestPosBlockedJumpBound(t *testing.T) {
 	r.players[f.sess.ID] = f.p
 
 	sx, sy := f.p.X, f.p.Y
-	clone.Elev[ti(sx, sy)] = 0
-	clone.Elev[ti(sx+1, sy)] = 3
+	r.world.Elev[ti(sx, sy)] = 0
+	r.world.Elev[ti(sx+1, sy)] = 3
 	f.now += 200
 	f.pos(map[string]any{"t": "pos", "x": sx + 1, "y": sy})
 	if !f.gotFix() {
 		t.Fatal("climbed 3 elevation levels in one step")
 	}
 	// A 2-level climb is inside the permissive jump bound.
-	clone.Elev[ti(sx+1, sy)] = 2
+	r.world.Elev[ti(sx+1, sy)] = 2
 	f.now += 200
 	f.pos(map[string]any{"t": "pos", "x": sx + 1, "y": sy})
 	if f.gotFix() {

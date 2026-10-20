@@ -19,6 +19,14 @@ export const CHUNK_GRID = SIZE / CHUNK;
 export const CHUNK_TILES = CHUNK * CHUNK;
 
 /**
+ * The tallest tile stack the renderer leaves room for: gameserver/world/mountains.go
+ * MaxElev, the tile mountains. A stack of e levels rises (e - 1) * 10 px over its foot,
+ * so the chunk bake's bottom pad, repaintTileBox's reach and the strips' sight lines
+ * (src/peaks.ts) are all sized from this. Ordinary ground stays at 1..3.
+ */
+export const MAX_ELEV = 32;
+
+/**
  * Sentinel tile value for "this tile has not been streamed yet". Real tile types are
  * 0..5 (see T in shared/world.js), so 255 can never collide. It is distinct from
  * T.WATER on purpose: water is walkable, and painting the void as ocean would invite the
@@ -100,6 +108,15 @@ export interface ChunkDelta {
   brokenBergs: number[];
   furn: { i: number; kind: string; z: number }[];
   farms: { i: number; crop: string; stage: number }[];
+  /**
+   * The chunk had already been applied: the server re-sent it because its ground
+   * changed (a terrain feature flag, gameserver/room/mountains.go). droppedNodes /
+   * droppedDecor are what the earlier copy had and this one does not — or has as
+   * something else — so their sprites must go before the new ones are spawned.
+   */
+  reapplied: boolean;
+  droppedNodes: number[];
+  droppedDecor: number[];
 }
 
 export class TileStore {
@@ -200,6 +217,30 @@ export class TileStore {
 
     const x0 = cx * CHUNK,
       y0 = cy * CHUNK;
+    // A re-sent chunk replaces the sparse layers too: whatever the old copy listed
+    // and the new one does not (or lists as another kind) is dropped first.
+    const reapplied = this.loaded.has(key);
+    const droppedNodes: number[] = [],
+      droppedDecor: number[] = [];
+    if (reapplied) {
+      const toWorld = (local: number) => (y0 + ((local / CHUNK) | 0)) * SIZE + (x0 + (local % CHUNK));
+      const nn = new Map<number, number>(),
+        nd = new Map<number, string>();
+      for (const e of m.nodes || []) if (Array.isArray(e)) nn.set(toWorld(e[0]), e[1] | 0);
+      for (const e of m.decor || []) if (Array.isArray(e)) nd.set(toWorld(e[0]), String(e[1]));
+      for (let ly = 0; ly < CHUNK; ly++)
+        for (let lx = 0; lx < CHUNK; lx++) {
+          const i = (y0 + ly) * SIZE + x0 + lx;
+          if (this.nodes.has(i) && nn.get(i) !== this.nodes.get(i)) {
+            this.nodes.delete(i);
+            droppedNodes.push(i);
+          }
+          if (this.decor.has(i) && nd.get(i) !== this.decor.get(i)) {
+            this.decor.delete(i);
+            droppedDecor.push(i);
+          }
+        }
+    }
     const T_ = this.tiles,
       E = this.elev,
       V = this.veins,
@@ -236,6 +277,9 @@ export class TileStore {
       brokenBergs: [],
       furn: [],
       farms: [],
+      reapplied,
+      droppedNodes,
+      droppedDecor,
     };
     for (const e of m.nodes || []) {
       if (!Array.isArray(e) || !inRange(e[0])) continue;

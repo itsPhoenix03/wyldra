@@ -149,7 +149,7 @@ func (r *Room) handleBuildMod(p *Player, m map[string]any) {
 			return
 		}
 	}
-	if r.medicTiles[i] || world.LandmarkBlock[i] {
+	if r.medicTiles[i] || r.landmarkBlocks(i) {
 		r.modFail(p, seq, "blocked")
 		return
 	}

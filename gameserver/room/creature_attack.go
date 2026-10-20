@@ -219,7 +219,8 @@ func (r *Room) lunge(c *Creature, typ string, dist float64) {
 	fear := r.fearsFire(c, typ)
 	for k := 0; k < n; k++ {
 		nx, ny := c.X+dx, c.Y+dy
-		if r.creStepBlocked(ti(nx, ny), canSwim[typ]) || (fear && r.fireBlocks(c, nx, ny)) {
+		if r.creStepBlocked(ti(nx, ny), canSwim[typ]) || (fear && r.fireBlocks(c, nx, ny)) ||
+			r.mtnClimbBlocked(ti(c.X, c.Y), ti(nx, ny)) {
 			return
 		}
 		c.X, c.Y = nx, ny

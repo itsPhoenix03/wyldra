@@ -329,7 +329,7 @@ func (r *Room) creatureSpawnTick(strength int) {
 				if px2 < 0 || py2 < 0 || px2 >= world.SIZE || py2 >= world.SIZE {
 					continue
 				}
-				if r.world.Tiles[ti(px2, py2)] != world.TGrass {
+				if r.world.Tiles[ti(px2, py2)] != world.TGrass || r.onMountainFace(px2, py2) {
 					continue
 				}
 				ct := creTypes["husk_wolf"]
@@ -410,7 +410,7 @@ func (r *Room) creatureSpawnTick(strength int) {
 		}
 	}
 
-	if !ok {
+	if !ok || r.onMountainFace(sx, sy) { // nothing spawns on a tile mountain's cliffs
 		return
 	}
 	ct := creTypes[typ]
@@ -768,7 +768,8 @@ func (r *Room) stepCreature(c *Creature, strength int, nowMs int64) {
 	sp := math.Min(rawSp, math.Max(math.Hypot(gx-c.X, gy-c.Y), 0.001))
 	fear := r.fearsFire(c, typ)
 	blocked := func(i int, x, y float64) bool {
-		return r.creStepBlocked(i, swims) || (fear && r.fireBlocks(c, x, y))
+		return r.creStepBlocked(i, swims) || (fear && r.fireBlocks(c, x, y)) ||
+			r.mtnClimbBlocked(ti(c.X, c.Y), i) // no scaling the tile mountains' cliffs
 	}
 
 	// a cached detour leads the way while it still points at this target

@@ -480,7 +480,7 @@ func (r *Room) planPath(c *Creature, tx, ty float64, swims, fear bool) (float64,
 				continue
 			}
 			li := local(nx, ny)
-			if prev[li] != 0 || !pass(nx, ny) {
+			if prev[li] != 0 || !pass(nx, ny) || r.mtnClimbBlocked(cy*world.SIZE+cx, ny*world.SIZE+nx) {
 				continue
 			}
 			// no cutting a blocked corner on a diagonal

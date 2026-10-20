@@ -146,6 +146,27 @@ _manifest.push(
   ['packed_ice',     '/tiles/packed_ice.svg',     64, 40],
   ['water_freezing', '/tiles/water_freezing.svg', 64, 40],
   ['water_hot',      '/tiles/water_hot.svg',      64, 40],
+  // tile mountains (gameserver/world/mountains.go): rock / ledge / trail tops per island, snow caps on the Woods and Spire (tileVis 2-6)
+  ['mtn_woods_rock',      '/tiles/mtn_woods_rock.svg',      64, 40],
+  ['mtn_woods_ledge',     '/tiles/mtn_woods_ledge.svg',     64, 40],
+  ['mtn_woods_trail',     '/tiles/mtn_woods_trail.svg',     64, 40],
+  ['mtn_woods_snow',      '/tiles/mtn_woods_snow.svg',      64, 40],
+  ['mtn_woods_snowledge', '/tiles/mtn_woods_snowledge.svg', 64, 40],
+  ['mtn_dunes_rock',      '/tiles/mtn_dunes_rock.svg',      64, 40],
+  ['mtn_dunes_ledge',     '/tiles/mtn_dunes_ledge.svg',     64, 40],
+  ['mtn_dunes_trail',     '/tiles/mtn_dunes_trail.svg',     64, 40],
+  ['mtn_spire_rock',      '/tiles/mtn_spire_rock.svg',      64, 40],
+  ['mtn_spire_ledge',     '/tiles/mtn_spire_ledge.svg',     64, 40],
+  ['mtn_spire_trail',     '/tiles/mtn_spire_trail.svg',     64, 40],
+  ['mtn_spire_snow',      '/tiles/mtn_spire_snow.svg',      64, 40],
+  ['mtn_spire_snowledge', '/tiles/mtn_spire_snowledge.svg', 64, 40],
+  ['mtn_marsh_rock',      '/tiles/mtn_marsh_rock.svg',      64, 40],
+  ['mtn_marsh_ledge',     '/tiles/mtn_marsh_ledge.svg',     64, 40],
+  ['mtn_marsh_trail',     '/tiles/mtn_marsh_trail.svg',     64, 40],
+  ['mtn_core_rock',       '/tiles/mtn_core_rock.svg',       64, 40],
+  ['mtn_core_ledge',      '/tiles/mtn_core_ledge.svg',      64, 40],
+  ['mtn_core_trail',      '/tiles/mtn_core_trail.svg',      64, 40],
+  // (their rock faces are added after this list)
   // --- decor & farming sprites ---
   ['farmplot',       '/sprites/farmplot.svg',                          64, 40],
   ['crop',           '/sprites/crop.svg',                              30, 34],
@@ -155,6 +176,14 @@ _manifest.push(
   ['mod_railing',    '/sprites/building_materials/mod_railing.svg',    64, 38],
   ['cloth_roll',     '/sprites/building_materials/cloth_roll.svg',     50, 36],
 );
+
+// --- tile mountain rock faces (tools/art/mountain-faces.mjs): the levels under a mountain
+// tile's top. Four seamless 10px bands of one cliff and a strata overlay per island rock,
+// and per snow cap on the Woods and the Spire; src/peaks.ts mountainFaces picks them. ---
+for (const isle of ['woods', 'dunes', 'spire', 'marsh', 'core'])
+  for (const kind of isle === 'woods' || isle === 'spire' ? ['rock', 'snow'] : ['rock'])
+    for (const f of ['face', 'face2', 'face3', 'face4', 'strata'])
+      _manifest.push([`mtn_${isle}_${kind}_${f}`, `/tiles/mtn_${isle}_${kind}_${f}.svg`, 64, 40]);
 
 // --- remaining staged assets (registered so future wiring can never hit a missing texture) ---
 _manifest.push(

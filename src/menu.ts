@@ -179,6 +179,9 @@ export function initMenu(onJoin: (opts: JoinOpts) => void): void {
   const namesToggle = document.getElementById(
     "menu-settings-names",
   ) as HTMLInputElement;
+  const peekToggle = document.getElementById(
+    "menu-settings-peek",
+  ) as HTMLInputElement;
 
   let createCode = localStorage.getItem("hearth-room") || "";
   let pendingAfterName: (() => void) | null = null;
@@ -329,6 +332,11 @@ export function initMenu(onJoin: (opts: JoinOpts) => void): void {
   });
   namesToggle.addEventListener("change", () => {
     setSetting("hearth-shownames", namesToggle.checked);
+  });
+  // read by the game scene when it starts, like the names toggle
+  peekToggle.checked = getSetting("hearth-camerapeek");
+  peekToggle.addEventListener("change", () => {
+    setSetting("hearth-camerapeek", peekToggle.checked);
   });
 
   // The in-game Quit button dispatches this; registered here so it is always live.

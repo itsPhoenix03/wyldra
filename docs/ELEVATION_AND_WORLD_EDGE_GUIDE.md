@@ -289,3 +289,28 @@ complain (SMALL_IMPROVEMENTS workflow).
 6. After every step: `npm run build`, fresh server, `node test.mjs`, two-tab co-op sanity,
    and load a PRE-change save (steps 1–8 must load old saves cleanly; step 9 must refuse
    them via `worldVersion`).
+
+## 9. Tile mountains, elevation up to 32, terrain occlusion
+
+`tileMountains` (room/features.go) stamps mountains onto the room's own copy of the world
+(`gameserver/world/mountains.go`, Go-only). Each is one compact, steep core (radius ~6-9) on
+lower slopes that stay the island's own ground, one summit of 2-4 tiles with 3-5 spurs and
+gullies, and one trail that winds at least once right round it at +1 per tile:
+
+| Mountain | Form | Rise over local ground | Trail |
+|---|---|---|---|
+| Spire | horned peak, snow from +14 | +26..+28 | ~45 tiles, ~1.3-1.6 turns |
+| Woods | snow-capped massif, snow from +16 | ~+22 | ~30 tiles, >1 turn |
+| Dunes | sheer sandstone butte, caprock summit | +14..+16 | ~25 tiles, >1 turn |
+| Marsh | craggy granite tor | +12..+14 | ~25 tiles, >1 turn |
+| Core | obsidian spike | +8..+10 | ~15 tiles, >1 turn |
+
+(Exact values for seed hearth-1: `HEARTH_MOUNTAIN_PNG=<dir> go test ./world -run TestMountainRenders -v`.)
+`MaxElev` is 32; the tallest summit stands ~28-30 (local base 1-3 plus the rise), so every elev
+consumer — the chunk bake's pad, `repaintTileBox`'s scan, the strips — must cover a 30-level
+lift. No face between 4-neighbours is taller than 4 levels (`maxStep`), so a fall costs at most
+3 hp per ledge. Rock tileVis (2-5) only stands over +3 above the base; the lower slopes and gentle
+shoulders keep the ground's own tileVis (0/1) and can be lifted up to ~+8, with steps of 1-3.
+Occlusion (`src/peaks.ts`): tall mountain tiles are also baked into one RenderTexture per iso
+row; inside a mountain region sprites sort by ground plane (`depthAt`). Elsewhere, and with the
+flag off, depth is exactly the old lifted model. A hidden keeper gets a pale silhouette.

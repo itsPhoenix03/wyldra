@@ -49,6 +49,11 @@ type WorldSpec struct {
 	// connected — so the cap is enforced there (room.Room.admit) and the
 	// registry only configures it.
 	MaxPlayers int `json:"maxPlayers"`
+	// Features sets this world's feature flags (room/features.go) over the
+	// process-wide HEARTH_FEATURES, e.g. "features": {"tileMountains": false}.
+	// A value the room has saved still wins: this is the starting point for a
+	// world, not an override of what its testers have since switched.
+	Features map[string]bool `json:"features,omitempty"`
 }
 
 // Config is the hosting configuration of one game-server process.
@@ -70,6 +75,22 @@ type Config struct {
 	// is the legacy HEARTH_SAVE_PATH escape hatch and is ignored (with a
 	// warning from LoadConfig) when more than one world is hosted.
 	SavePathOverride string
+	// Features are the process-wide feature-flag defaults from HEARTH_FEATURES
+	// ("tileMountains=0,cameraPeek=1"); a world's own `features` override them.
+	Features map[string]bool
+}
+
+// WorldFeatures is the flag set a world's room starts from: HEARTH_FEATURES,
+// then the world's registry entry over it.
+func (c Config) WorldFeatures(w WorldSpec) map[string]bool {
+	out := map[string]bool{}
+	for k, v := range c.Features {
+		out[k] = v
+	}
+	for k, v := range w.Features {
+		out[k] = v
+	}
+	return out
 }
 
 // defaultWorldsFile is the registry both processes read. The control plane's
@@ -107,6 +128,11 @@ func LoadConfig(logf func(string, ...any)) (Config, error) {
 		Eager:            os.Getenv("HEARTH_EAGER_WORLDS") != "",
 		SaveDir:          os.Getenv("HEARTH_SAVE_DIR"),
 		SavePathOverride: os.Getenv("HEARTH_SAVE_PATH"),
+	}
+	var problems []string
+	cfg.Features, problems = room.ParseFeatures(os.Getenv("HEARTH_FEATURES"))
+	for _, p := range problems {
+		logf("[hearth] HEARTH_FEATURES: ignoring %s", p)
 	}
 
 	all, source, err := loadRegistry(cfg.InstanceID, logf)

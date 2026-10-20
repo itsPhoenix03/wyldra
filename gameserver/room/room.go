@@ -92,6 +92,11 @@ type Config struct {
 	// a couple of seconds, so tests (and any future multi-room process sharing
 	// one seed) can hand in a pre-generated, read-only world.
 	World *world.World
+	// Features are the feature-flag values this room starts with where they
+	// differ from the registry defaults (features.go): hosting folds
+	// HEARTH_FEATURES and the world's registry entry into it. A value in the
+	// save wins over it.
+	Features map[string]bool
 }
 
 // DefaultMaxPlayers is the co-op design target from PLAN.md: four players to a
@@ -123,7 +128,14 @@ func (e *JoinRefused) AuthFailReason() string { return e.Reason }
 type Room struct {
 	cfg   Config
 	world *world.World
-	spawn [2]int
+	// baseWorld is the world as generated (or handed in, possibly shared); world
+	// is it with the room's terrain features stamped on (mountains.go).
+	baseWorld *world.World
+	spawn     [2]int
+
+	// Feature flags (features.go) and the tile-mountain stamp (mountains.go).
+	features map[string]bool
+	mtn      mountainState
 
 	medics     []world.Medic
 	medicTiles map[int]bool
@@ -281,6 +293,7 @@ func New(cfg Config) (*Room, error) {
 	r := &Room{
 		cfg:           cfg,
 		world:         w,
+		baseWorld:     w,
 		spawn:         world.FindSpawn(w),
 		medics:        medics,
 		medicTiles:    mt,
@@ -318,9 +331,11 @@ func New(cfg Config) (*Room, error) {
 		kicks:         make(chan kickReq, 64),
 		nowFn:         func() int64 { return time.Now().UnixMilli() },
 	}
+	r.initFeatures(cfg.Features)
 	if err := r.loadSave(); err != nil {
 		cfg.Logger.Printf("[hearth] failed to load save: %v", err)
 	}
+	r.applyTerrainFeatures(false) // with no save to read flags from (loadSave stamps otherwise)
 	r.setupCamps()
 	r.clearBuiltOverNodes()
 	return r, nil
@@ -618,6 +633,8 @@ func (r *Room) onJoin(s *Session) {
 		// this session, never an input to it — the gate is still the signed
 		// ticket claim and nothing else.
 		"dev": r.devAllowed(p),
+		// The room's feature flags (features.go); `feat` re-sends them on change.
+		"features": r.featuresWire(),
 	})
 	r.pushChunks(p)
 	r.broadcast(map[string]any{"t": "pj", "id": s.ID, "x": p.X, "y": p.Y, "name": p.Name, "worn": nullable(p.Worn), "armor": p.Armor})
@@ -798,6 +815,10 @@ func (r *Room) loadSave() error {
 		return nil
 	}
 	r.day, r.time, r.won, r.mono = snap.Day, snap.Time, snap.Won, snap.Mono
+	// the flags first: the terrain they shape is stamped before anything the
+	// save placed on it is read back
+	r.applySavedFeatures(snap.Features)
+	r.applyTerrainFeatures(false)
 	if snap.Version < world.WorldVersion {
 		r.migrateSave(snap)
 		return nil
@@ -946,6 +967,7 @@ func (r *Room) saveGame() error {
 		Farms:       map[string]*persist.Farm{},
 		ChestInv:    map[string]map[string]int{},
 		Modules:     r.modulesSnapshot(),
+		Features:    r.featuresWire(),
 	}
 	for i, at := range r.removed {
 		snap.Removed = append(snap.Removed, persist.NodeRespawn{I: i, Remaining: maxInt64(0, at-now)})
