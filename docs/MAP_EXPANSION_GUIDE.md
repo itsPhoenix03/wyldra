@@ -1446,3 +1446,24 @@ The expanded map is ready when:
 - Biome-specific assets are correctly placed.
 - Incompatible saves and profile coordinates are automatically rejected/relocated by world version; manual deletion is only a development reset.
 - Worldgen/startup and static-object counts remain within recorded budgets on the target browser/device.
+
+## Tile mountains (Go-only pass)
+
+With `tileMountains` on (`room/features.go`; it ships off until the in-game check is done) the
+five `MOUNTAINS` sites get terrain mountains from `gameserver/world/mountains.go`. Like the
+village camps they are not in shared/world.js, so the parity digests and
+`tools/worldmap/render.mjs` never see them; render them with
+`HEARTH_MOUNTAIN_PNG=<dir> go test ./world -run TestMountainRenders` (a top-down PNG, a text
+dump with the trail, the reserved-ground context, and a JSON region per mountain). The pass keeps
+every tile's type, never covers water, clearings (free/land radii), monoliths, temple pieces or
+medics, and records the base values it replaces so it can be lifted at runtime.
+
+Each island's mountain has its own form (`massifSpecs`): the Spire a horned peak, +26..+28 (the
+tallest); the Woods a snow-capped massif, ~+22; the Dunes a sheer sandstone butte, +14..+16; the
+Marsh a craggy tor, +12..+14; the Core a small obsidian spike, +8..+10, on the roomiest ground
+between the north shore and the temple (within 9 tiles of its site). The summit may move up to
+5 tiles from the `MOUNTAINS` site to find the room its height needs (`capSlope` eases every
+massif down toward water and reserved ground). Elevation reaches `MaxElev` 32 at most (~30 in
+practice); faces are 4 levels at most; the trail winds at least once round each summit.
+Moving a site, a clearing or a shore near a mountain changes its shape; re-render and re-run
+`go test ./world -run TestMountain`.

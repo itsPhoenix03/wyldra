@@ -35,7 +35,7 @@ func (r *Room) hitAnimal(p *Player, a *Animal, dmg int, seq any) {
 		kny := a.Y + math.Sin(atkAng)*0.9
 		kni := ti(knx, kny)
 		_, occupied := r.structures[kni]
-		if inBounds(kni) && r.creFooting(kni) && !occupied {
+		if inBounds(kni) && r.creFooting(kni) && !occupied && !r.mtnClimbBlocked(ti(a.X, a.Y), kni) {
 			a.X, a.Y = knx, kny
 		}
 		r.broadcast(map[string]any{"t": "chit", "id": a.ID, "ang": atkAng, "by": p.S.ID, "seq": seq})
@@ -128,7 +128,7 @@ func (r *Room) creatureSurvived(p *Player, c *Creature, atkAng float64, seq any,
 	kny := c.Y + math.Sin(atkAng)*kb
 	kni := ti(knx, kny)
 	_, occupied := r.structures[kni]
-	if inBounds(kni) && r.creFooting(kni) && !occupied {
+	if inBounds(kni) && r.creFooting(kni) && !occupied && !r.mtnClimbBlocked(ti(c.X, c.Y), kni) {
 		c.X, c.Y = knx, kny
 	}
 	c.Stun = 3

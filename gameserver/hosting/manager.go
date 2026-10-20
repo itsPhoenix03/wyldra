@@ -216,6 +216,7 @@ func (m *Manager) buildRoom(spec WorldSpec) (*room.Room, error) {
 		Defs:       m.opts.Defs,
 		Store:      store,
 		SaveEvery:  m.opts.SaveEvery,
+		Features:   m.opts.Config.WorldFeatures(spec),
 		// Every room logs under its own world id, so a multi-world process's
 		// output stays readable.
 		Logger: log.New(m.log.Writer(), m.log.Prefix()+"["+spec.WorldID+"] ", m.log.Flags()),

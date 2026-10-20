@@ -73,7 +73,7 @@ func (r *Room) posBlocked(x, y float64, z int, fromX, fromY float64) bool {
 	if int(r.world.Elev[i])-int(r.world.Elev[ti(fromX, fromY)]) > 2 {
 		return true
 	}
-	if r.medicTiles[i] || world.LandmarkBlock[i] {
+	if r.medicTiles[i] || r.landmarkBlocks(i) {
 		return true
 	}
 	s, ok := r.structures[i]

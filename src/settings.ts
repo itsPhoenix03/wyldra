@@ -5,11 +5,14 @@
  * The Settings toggles, stored as "1"/"0". menu.ts writes them, audio.ts and main.ts read
  * them back through getSetting(), so the key strings are spelled out in this module only.
  */
-export type SettingKey = "hearth-muted" | "hearth-shownames";
+export type SettingKey = "hearth-muted" | "hearth-shownames" | "hearth-camerapeek";
 
 const SETTING_DEFAULTS: Record<SettingKey, boolean> = {
   "hearth-muted": false,
   "hearth-shownames": true,
+  // the camera leans ahead behind tile mountains and over ledges; the world's cameraPeek
+  // feature flag must be on as well (main.ts updatePeek)
+  "hearth-camerapeek": true,
 };
 
 export function getSetting(key: SettingKey): boolean {
