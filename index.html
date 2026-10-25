@@ -75,6 +75,25 @@
     #medicPanel button { background: #2a3a4a; color: #fff; border: 1px solid #57a; border-radius: 4px;
                          padding: 5px 12px; font-family: monospace; cursor: pointer; margin-top: 4px; }
     #medicPanel button:disabled { opacity: 0.4; cursor: default; }
+    /* keyboard choice in a panel (ui.ts navSync); shown only while the keys are in use */
+    body.kb-nav .kbsel { outline: 2px solid #ffd97a; outline-offset: 1px; box-shadow: 0 0 10px rgba(255,217,122,.45); }
+    .slot .kb { margin-left: 4px; padding: 0 3px; border-radius: 3px; font-size: 10px; color: #cde; background: #2a3a4a; border: 1px solid #57a; }
+    #controlsModal { width: 520px; }
+
+    /* ---- key-binding editor (src/controlsUI.ts): the in-game window and the title screen's Controls page ---- */
+    .kb-list { display: grid; grid-template-columns: 1fr auto auto; gap: 4px 8px; align-items: center; }
+    .kb-group { grid-column: 1 / -1; margin: 12px 0 2px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8ab; }
+    .kb-group:first-child { margin-top: 0; }
+    .kb-name { font-size: 13px; }
+    .kb-key { min-width: 84px; padding: 4px 8px; font: 12px monospace; color: #fff; background: #2a3a4a;
+              border: 1px solid #57a; border-radius: 4px; cursor: pointer; }
+    .kb-key:hover { border-color: #9cf; }
+    .kb-key.empty { color: #667; }
+    .kb-key.listening { border-color: #ffd97a; color: #ffd97a; background: #3a3420; }
+    .kb-status { min-height: 1.3em; margin: 10px 0 0; color: #ffd97a; font-size: 12px; }
+    .kb-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; }
+    .kb-note { color: #889; font-size: 11px; line-height: 1.4; }
+    .kb-reset { flex: none; }
 
     /* ================================================================
        TITLE SCREEN — a game title screen: the logo and a vertical menu on the
@@ -293,6 +312,15 @@
       border: 1px solid rgba(109,214,200,.2); border-radius: 12px; }
     .menu-toggle:hover { border-color: rgba(109,214,200,.5); }
     .menu-toggle input { accent-color: #ffd166; width: 17px; height: 17px; }
+    #menu-controls { width: min(560px, 92vw); }
+    #menu .kb-group { color: #6dd6c8; font-size: 12px; }
+    #menu .kb-name { color: #efe3c8; font-size: 15px; }
+    #menu button.kb-key { min-width: 92px; padding: 7px 10px; font-size: 14px; border-radius: 8px; box-shadow: none; }
+    #menu button.kb-key:hover { transform: none; }
+    #menu button.kb-key.empty { color: #6e6888; }
+    #menu button.kb-key.listening { color: #ffd166; border-color: #ffd166; background: rgba(255,209,102,.12); }
+    #menu .kb-status { color: #ffd166; font-size: 14px; }
+    #menu .kb-note { color: #a99f8a; font-size: 12.5px; font-style: italic; }
 
 
     /* ---- motion ---- */
@@ -342,7 +370,7 @@
     /* Listed out rather than relying on `button` alone: the in-game panels declare
        `cursor: pointer` at ID specificity, which would otherwise win. */
     button, input, select, textarea, .menu-toggle, [data-back],
-    #menu button, #btns button, .recipe button, #chestPanel button, #medicPanel button, #devPanel button,
+    #menu button, #btns button, .recipe button, #chestPanel button, #medicPanel button, #devPanel button, .kb-key,
     .slot.place, .slot.tool, .slot.use {
       cursor: url('/sprites/cursor_pointer.svg') 2 1, pointer;
     }
@@ -384,7 +412,7 @@
           <button id="menu-play-btn" class="mm play sel" data-hint="Step into the shared world.">Play</button>
           <button id="menu-create-btn" class="mm" data-hint="Get a room code to share with friends.">Create room</button>
           <button id="menu-join-btn" class="mm" data-hint="Enter a friend's room code.">Join room</button>
-          <button id="menu-settings-btn" class="mm" data-hint="Sound, player names and the camera.">Settings</button>
+          <button id="menu-settings-btn" class="mm" data-hint="Sound, player names, the camera and the keys.">Settings</button>
         </nav>
         <p class="mm-hint" id="menu-hint" aria-live="polite">Step into the shared world.</p>
         <p class="home-keys"><kbd>↑</kbd> <kbd>↓</kbd> to choose, <kbd>Enter</kbd> to select</p>
@@ -444,7 +472,16 @@
       <label class="menu-toggle"><input type="checkbox" id="menu-settings-names" /> Show player names</label>
       <label class="menu-toggle" title="The camera leans toward ground hidden behind mountains and over ledges while you walk"><input type="checkbox" id="menu-settings-peek" /> Camera peek</label>
       <div class="menu-actions">
+        <button id="menu-settings-controls">Controls</button>
         <button class="menu-back" data-back>Back</button>
+      </div>
+    </div>
+
+    <div id="menu-controls" class="menu-screen menu-card">
+      <h2><img src="/sprites/workbench.svg" alt="" />Controls</h2>
+      <div id="menu-controls-body"></div>
+      <div class="menu-actions">
+        <button class="menu-back" data-back-to="settings">Back</button>
       </div>
     </div>
   </div>
@@ -453,10 +490,11 @@
   <div id="msg"></div>
   <div id="quickbar"></div>
   <div id="btns">
-    <button id="invBtn">Bag [I]</button>
-    <button id="craftBtn">Craft [C]</button>
-    <button id="buildBtn">Build [B]</button>
-    <button id="helpBtn">? [H]</button>
+    <button id="invBtn">Bag [<span data-key="inventory"></span>]</button>
+    <button id="craftBtn">Craft [<span data-key="craft"></span>]</button>
+    <button id="buildBtn">Build [<span data-key="build"></span>]</button>
+    <button id="controlsBtn">Keys [<span data-key="controls"></span>]</button>
+    <button id="helpBtn">? [<span data-key="help"></span>]</button>
     <button id="quitBtn">Quit</button>
   </div>
   <div id="craftPanel"></div>
@@ -464,38 +502,47 @@
   <div id="chestPanel"><div class="chest-body"></div></div>
   <div id="medicPanel"></div>
   <div id="invModal" class="modal">
-    <h3>🎒 Inventory <span class="hint">(I or ESC to close · click a 🔨 item to place it)</span></h3>
+    <h3>🎒 Inventory <span class="hint">(<span data-key="inventory"></span> or ESC to close · click an item, or pick it with the arrows and <span data-key="uiConfirm"></span> · a chosen 🔨 item is placed with a click or <span data-key="place"></span>)</span></h3>
     <div id="inv"></div>
   </div>
   <div id="helpModal" class="modal">
-    <h3>❓ How to play <span class="hint">(H or ESC to close)</span></h3>
+    <h3>❓ How to play <span class="hint">(<span data-key="help"></span> or ESC to close · every key can be changed under Keys [<span data-key="controls"></span>])</span></h3>
     <table>
-      <tr><td><kbd>W A S D</kbd> / arrows</td><td>Move (mud slows you; cliffs need jumping; falls hurt)</td></tr>
-      <tr><td><kbd>SPACE</kbd></td><td>Jump — clears 2-level ledges</td></tr>
-      <tr><td><kbd>F</kbd></td><td>Attack monsters / animals · demolish structures and building pieces (half refund)</td></tr>
-      <tr><td><kbd>B</kbd></td><td>Build panel — floors, walls, fixtures and decor built from crafted materials. Walls fill their tile and keep creatures out; bridges cross water</td></tr>
-      <tr><td><kbd>E</kbd></td><td>Gather · read notes · enter/exit mines (your safe place — no weather, no creatures) · dig (underground) · awaken monoliths · collect water at shores</td></tr>
-      <tr><td><kbd>E</kbd> on farm plot</td><td>Plant (wheat needs 2 fiber, glowcap needs 1 essence) / harvest when fully grown</td></tr>
-      <tr><td><kbd>E</kbd> on a chest</td><td>Open shared chest storage — deposit and withdraw resources</td></tr>
-      <tr><td><kbd>E</kbd> near a medic</td><td>Bargain for full healing — pay the requested resource before the offer expires</td></tr>
-      <tr><td><kbd>C</kbd></td><td>Crafting menu (needs the right station nearby)</td></tr>
-      <tr><td><kbd>I</kbd></td><td>Inventory bag</td></tr>
-      <tr><td><kbd>1–5</kbd></td><td>Equip axe / pickaxe / stone pickaxe / sword / iron sword</td></tr>
-      <tr><td><kbd>T</kbd></td><td>Place a torch (inside mines)</td></tr>
-      <tr><td><kbd>R</kbd></td><td>Rotate wall while placing</td></tr>
-      <tr><td><kbd>M</kbd></td><td>Mute sound</td></tr>
+      <tr><td><kbd data-key="moveUp"></kbd> <kbd data-key="moveLeft"></kbd> <kbd data-key="moveDown"></kbd> <kbd data-key="moveRight"></kbd></td><td>Move (mud slows you; cliffs need jumping; falls hurt)</td></tr>
+      <tr><td><kbd data-key="jump"></kbd></td><td>Jump — clears 2-level ledges</td></tr>
+      <tr><td><kbd data-key="attack"></kbd></td><td>Attack monsters / animals · demolish structures and building pieces (half refund)</td></tr>
+      <tr><td><kbd data-key="build"></kbd></td><td>Build panel — floors, walls, fixtures and decor built from crafted materials. Walls fill their tile and keep creatures out; bridges cross water</td></tr>
+      <tr><td><kbd data-key="interact"></kbd></td><td>Gather · read notes · enter/exit mines (your safe place — no weather, no creatures) · dig (underground) · awaken monoliths · collect water at shores</td></tr>
+      <tr><td><kbd data-key="interact"></kbd> on farm plot</td><td>Plant (wheat needs 2 fiber, glowcap needs 1 essence) / harvest when fully grown</td></tr>
+      <tr><td><kbd data-key="interact"></kbd> on a chest</td><td>Open shared chest storage — deposit and withdraw resources</td></tr>
+      <tr><td><kbd data-key="interact"></kbd> near a medic</td><td>Bargain for full healing — <kbd data-key="medicAccept"></kbd> accepts, <kbd data-key="medicDecline"></kbd> declines</td></tr>
+      <tr><td><kbd data-key="craft"></kbd></td><td>Crafting menu (needs the right station nearby)</td></tr>
+      <tr><td><kbd data-key="inventory"></kbd></td><td>Inventory bag</td></tr>
+      <tr><td><kbd data-key="hotbar1"></kbd>–<kbd data-key="hotbar5"></kbd></td><td>Equip axe / pickaxe / stone pickaxe / sword / iron sword</td></tr>
+      <tr><td><kbd data-key="drink"></kbd> <kbd data-key="eat"></kbd> <kbd data-key="medicine"></kbd></td><td>Drink water · eat your most filling food · take medicine</td></tr>
+      <tr><td><kbd data-key="cloak"></kbd> <kbd data-key="armor"></kbd></td><td>Change cloak (heat → fur → none) · Starmetal armor on / off</td></tr>
+      <tr><td><kbd data-key="boat"></kbd></td><td>Ready a boat (press again for the next one, then none)</td></tr>
+      <tr><td><kbd data-key="place"></kbd></td><td>Place the chosen item or building piece on the tile in front of you</td></tr>
+      <tr><td><kbd data-key="rotate"></kbd></td><td>Rotate while placing</td></tr>
+      <tr><td><kbd data-key="torch"></kbd></td><td>Place a torch (inside mines)</td></tr>
+      <tr><td><kbd data-key="uiUp"></kbd> <kbd data-key="uiDown"></kbd> <kbd data-key="uiConfirm"></kbd></td><td>In an open panel: move the choice and pick it · <kbd data-key="uiNext"></kbd> switches between open panels · <kbd>Esc</kbd> closes the newest one</td></tr>
+      <tr><td><kbd data-key="mute"></kbd></td><td>Mute sound</td></tr>
       <tr><td><kbd>F9</kbd></td><td>Dev kit (only if server runs in dev mode)</td></tr>
-      <tr><td><kbd>Bag</kbd></td><td>Click a boat to SELECT it — you swim without one (slow, and hot/freezing seas hurt)</td></tr>
-      <tr><td><kbd>Bag</kbd> → cloak</td><td>Click a Heat Cloak or Fur Cloak to WEAR it — owning it is not enough, you must equip it</td></tr>
+      <tr><td><kbd>Bag</kbd></td><td>Select a boat to SAIL — you swim without one (slow, and hot/freezing seas hurt)</td></tr>
+      <tr><td><kbd>Bag</kbd> → cloak</td><td>Choose a Heat Cloak or Fur Cloak to WEAR it — owning it is not enough, you must equip it</td></tr>
     </table>
     <p><b>Survival:</b> eat (hunt + cook at campfire) and drink (E at water, click 💧) or you'll starve.
     Campfires heal you, set your respawn, and shield wooden buildings from night Blight Storms.
     Herbal Medicine (craft at a campfire: 4 fiber + 1 water) heals 3 HP on the spot — or find a medic on the Woods or Spire and bargain for a full heal instead.
     Deserts need a Heat Cloak, snow needs a Fur Cloak. Shelter beside structures in sandstorms; reach a campfire in blizzards.</p>
-    <p><b>Building:</b> open the bag, click a 🔨 item, then click a tile. Click an existing wall to stack it higher. Walls block monsters; brutes smash them.
+    <p><b>Building:</b> open the bag, choose a 🔨 item, then click a tile — or press <kbd data-key="place"></kbd> to place it in front of you. Click an existing wall to stack it higher. Walls block monsters; brutes smash them.
     Place farm plots outdoors to grow wheat and glowcap. Decor items (banners, rugs, vases, fences) are zone-restricted — your Bag shows a hint when they cannot be placed. Mines can be furnished as underground hideouts: place chests and beds inside dug tunnels.</p>
     <p><b>Boats:</b> craft one, open your Bag, click the boat to SELECT it, then walk into the sea to sail. Without a selected boat you will swim — much slower, and hot or freezing seas deal damage over time. Icebergs destroy wooden boats — a Starmetal-reinforced hull smashes through.</p>
     <p><b>Goal:</b> follow the hidden notes 📜 across five distant islands, awaken all 4 Monoliths with forged Cores, build the World Engine at the Core Void, survive the final assault.</p>
+  </div>
+  <div id="controlsModal" class="modal">
+    <h3>⌨ Controls <span class="hint">(<span data-key="controls"></span> or ESC to close · also under Settings on the title screen)</span></h3>
+    <div id="controlsBody"></div>
   </div>
   <script type="module" src="/src/boot.ts"></script>
 </body>

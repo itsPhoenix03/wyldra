@@ -1,6 +1,7 @@
 // Front-end menu shell. Owns all menu DOM/state; main.ts never reaches into this.
 import { getSetting, setSetting } from "./settings.ts";
 import { buildMenuScene } from "./menuScene.ts";
+import { mountControls } from "./controlsUI.ts";
 
 export interface JoinOpts {
   name: string;
@@ -31,7 +32,7 @@ function getStoredName(): string {
   return localStorage.getItem("hearth-name") || "";
 }
 
-type ScreenName = "home" | "create" | "join" | "profile" | "settings";
+type ScreenName = "home" | "create" | "join" | "profile" | "settings" | "controls";
 
 const SCREEN_NAMES: ScreenName[] = [
   "home",
@@ -39,6 +40,7 @@ const SCREEN_NAMES: ScreenName[] = [
   "join",
   "profile",
   "settings",
+  "controls",
 ];
 
 /**
@@ -142,6 +144,7 @@ export function initMenu(onJoin: (opts: JoinOpts) => void): void {
     join: document.getElementById("menu-join")!,
     profile: document.getElementById("menu-profile")!,
     settings: document.getElementById("menu-settings")!,
+    controls: document.getElementById("menu-controls")!,
   };
 
   const homeName = document.getElementById("menu-home-name")!;
@@ -258,6 +261,19 @@ export function initMenu(onJoin: (opts: JoinOpts) => void): void {
   document
     .getElementById("menu-settings-btn")!
     .addEventListener("click", () => showScreen("settings"));
+
+  document
+    .getElementById("menu-settings-controls")!
+    .addEventListener("click", () => showScreen("controls"));
+  menu.querySelectorAll<HTMLButtonElement>("[data-back-to]").forEach((btn) => {
+    btn.addEventListener("click", () => showScreen(btn.dataset.backTo as ScreenName));
+  });
+  // Escape steps back a screen, as in a game (a key prompt on the Controls page takes it first)
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || menu.style.display === "none" || menu.dataset.screen === "home") return;
+    screens[menu.dataset.screen as ScreenName]?.querySelector<HTMLButtonElement>("[data-back], [data-back-to]")?.click();
+  });
+  mountControls(document.getElementById("menu-controls-body")!);
 
   menu.querySelectorAll<HTMLButtonElement>("[data-back]").forEach((btn) => {
     btn.addEventListener("click", () => {
