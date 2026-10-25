@@ -128,6 +128,25 @@ function openShaft(x, y) {
   for (const b of before) if (mineRoot(b) === root) mines++;
   return { opened: opened.sort((a, b) => a - b), mines };
 }
+// Sets a torch beside a new entrance's ladder so the light down there has a source: the first carved tile in this
+// order (the ones behind the ladder on screen first), else the shaft. A mine already lit around the shaft gets none.
+const SHAFT_TORCH = [[0, -1], [-1, 0], [-1, -1], [1, 0], [0, 1], [1, -1], [-1, 1], [1, 1]];
+function lightShaft(x, y) {
+  const at = (dx, dy) => {
+    const nx = x + dx, ny = y + dy;
+    return nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE ? -1 : ny * SIZE + nx;
+  };
+  for (let dy = -1; dy <= 1; dy++)
+    for (let dx = -1; dx <= 1; dx++) if (torches.has(at(dx, dy))) return -1;
+  let spot = at(0, 0);
+  for (const [dx, dy] of SHAFT_TORCH) {
+    const t = at(dx, dy);
+    if (t >= 0 && digs.has(t)) { spot = t; break; }
+  }
+  if (!digs.has(spot)) return -1;
+  torches.add(spot);
+  return spot;
+}
 
 // --- persistence: JSON snapshot on disk (swap for a real DB later) ---
 const SAVE_PATH = 'server/save.json';
@@ -187,6 +206,8 @@ function saveGame() {
 }
 const snapshot = (p) => ({ inv: p.inv, tools: [...p.tools], gear: [...p.gear], wornGear: p.wornGear || null, hp: p.hp, hunger: p.hunger, thirst: p.thirst, x: p.x, y: p.y, name: p.name || 'Keeper' });
 loadSave();
+// every standing entrance gets its torch: ones built before they came with one get it now
+for (const [i, s] of structures) if (s.kind === 'mineshaft') lightShaft(i % SIZE, (i / SIZE) | 0);
 setInterval(saveGame, 30000);
 process.on('SIGINT', () => { saveGame(); console.log('\n[hearth] saved. bye'); process.exit(0); });
 
@@ -657,6 +678,8 @@ wss.on('connection', (ws) => {
       if (kind === 'mineshaft') {     // a starting chamber on fresh rock, or just an opening into the mine below
         const { opened, mines } = openShaft(x, y);
         if (opened.length) bcast({ t: 'dig', tiles: opened });
+        const torch = lightShaft(x, y);
+        if (torch >= 0) bcast({ t: 'torch', i: torch });
         if (mines === 1) send(ws, { t: 'msg', s: 'Your entrance opens into an existing mine.' });
         else if (mines > 1) send(ws, { t: 'msg', s: 'Your entrance joins the mines below into one.' });
       }

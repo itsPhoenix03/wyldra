@@ -276,7 +276,7 @@ func (r *Room) erodeWooden() {
 			continue
 		}
 		x, y := float64(i%world.SIZE), float64(i/world.SIZE)
-		safe := false
+		safe := r.villageFireNear(x, y, 6)
 		for j, s2 := range r.structures {
 			if s2.Kind == "campfire" &&
 				math.Hypot(float64(j%world.SIZE)-x, float64(j/world.SIZE)-y) <= 6 {

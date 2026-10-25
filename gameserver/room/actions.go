@@ -303,6 +303,9 @@ func (r *Room) handleBuild(p *Player, m map[string]any) {
 		if len(opened) > 0 {
 			r.broadcast(map[string]any{"t": "dig", "tiles": opened})
 		}
+		if t := r.lightShaft(int(x), int(y)); t >= 0 {
+			r.broadcast(map[string]any{"t": "torch", "i": t})
+		}
 		switch {
 		case mines == 1:
 			r.send(p, map[string]any{"t": "msg", "s": "Your entrance opens into an existing mine."})
