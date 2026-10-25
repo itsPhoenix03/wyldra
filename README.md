@@ -66,6 +66,10 @@ Node server is still available as `npm run start:legacy` (port 8081).
 
 ## Controls
 
+The whole game can be played from the keyboard. These are the defaults — every key except
+**ESC**, **F9** and **F10** can be rebound under **Settings → Controls** on the title
+screen, or in game with **O** (the **Keys** button). Bindings are saved in the browser.
+
 | Key | Action |
 | --- | --- |
 | **WASD / arrows** | move (mud slows you 50%; deep water means swimming) |
@@ -73,9 +77,14 @@ Node server is still available as `npm run start:legacy` (port 8081).
 | **F** | attack (turns to face the nearest enemy) |
 | **SPACE** | jump — standing and running jumps differ; jumping clears higher ledges |
 | **1–5** | equip axe, pickaxe, stone pickaxe, stone sword, iron sword |
-| **C / B / I / H** | craft · build · inventory · help |
+| **Q / X / V** | drink water · eat your most filling food · take medicine |
+| **Z / U / L** | change cloak (heat → fur → none) · Starmetal armor on / off · ready a boat |
+| **G** | place the chosen item or building piece on the tile in front of you |
 | **R** | rotate a placeable before confirming · **ESC** cancels |
 | **T** | plant a torch (mines only; 2 wood + 1 fiber) |
+| **Y / N** | accept / decline a medic's offer |
+| **C / B / I / H / O** | craft · build · inventory · help · controls |
+| **↑ ↓ ← → / Enter / Tab** | in an open panel: move the choice, pick it, switch to the next open panel · **ESC** closes the newest panel |
 | **M** | mute / unmute |
 | **F9 / F10** | dev kit / dev panel (`npm run start:dev`) |
 

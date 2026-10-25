@@ -30,3 +30,7 @@ control/.id-secret
 .idea/
 .DS_Store
 Thumbs.db
+
+# Agents folders
+.claude
+.codex

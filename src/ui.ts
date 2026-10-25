@@ -3,6 +3,8 @@ import { RECIPES, NAMES, RESOURCES, MATERIALS, MODULES, canAfford } from '../sha
 const DECOR_ZONE_IN  = new Set(Object.entries(RECIPES as any).filter(([,r]: any) => r.decor && r.zone === 'in').map(([k]) => k));
 const DECOR_ZONE_OUT = new Set(Object.entries(RECIPES as any).filter(([,r]: any) => r.decor && r.zone === 'out').map(([k]) => k));
 import { isNightTime } from '../shared/time.js';
+import { actionsFor, isMenuAction, keyLabel, matches, paintKeyLabels, setMenuCapture, type Action } from './keybinds.ts';
+import { mountControls } from './controlsUI.ts';
 
 const $ = (id: string) => document.getElementById(id)!;
 let msgTimer = 0;
@@ -53,6 +55,10 @@ const icon = (k: string) =>
      starmetal_armor: '🛡' } as any)[k] || '▪';
 
 const HOTBAR = ['axe', 'pick', 'spick', 'sword', 'isword'];
+const hotKey = (t: string) => keyLabel(`hotbar${HOTBAR.indexOf(t) + 1}` as Action);
+// the food the eat key reaches for first (main.ts eat(): most filling first)
+const EAT_ORDER = ['cookedmeat', 'bread', 'glowcap'];
+const kb = (a: Action) => `<small class="kb">${keyLabel(a)}</small>`;
 const CLOAKS = ['heatcloak', 'furcloak', 'starmetal_armor'];   // wearables shown on the quickbar
 const isWorn = (st: { wornGear: string | null; armorOn: boolean }, t: string) =>
   t === 'starmetal_armor' ? st.armorOn : st.wornGear === t;
@@ -78,44 +84,160 @@ export function initUI(
   let medicOffer: UIState['medicOffer'] = null;
   let medicSig = '';
 
+  // ---- panels and the keyboard ----------------------------------------------------
+  // The panels a player can open are kept in the order they were opened; the newest one
+  // still showing holds the keyboard: the menu keys (arrows, Enter, Tab by default) move
+  // and choose in it instead of reaching the game. Each panel names what can be chosen.
+  const NAV_ITEMS: Record<string, string> = {
+    invModal: '.slot[data-use], .slot[data-eq], .slot[data-wear], .slot[data-veh], .slot[data-k]',
+    craftPanel: 'button[data-r]',
+    buildPanel: 'button[data-mod]',
+    chestPanel: 'button[data-res]',
+    controlsModal: 'button',
+    helpModal: '',
+  };
+  let stack: string[] = [];
+  let navSel: HTMLElement | null = null;
+  let navIn = '';
+  const navKeys: Record<string, { key: string; i: number }> = {};
+  const isOpen = (id: string) => $(id).style.display === 'block';
+  const setOpen = (id: string, open: boolean) => {
+    $(id).style.display = open ? 'block' : 'none';
+    stack = stack.filter((x) => x !== id);
+    if (open) stack.push(id);
+    if (id === 'craftPanel') panelSig = '';
+    if (id === 'buildPanel') buildSig = '';
+  };
+  const navPanel = () => {
+    for (let i = stack.length - 1; i >= 0; i--) if (isOpen(stack[i])) return stack[i];
+    return null;
+  };
+  const itemsOf = (id: string) =>
+    NAV_ITEMS[id] ? Array.from($(id).querySelectorAll<HTMLElement>(NAV_ITEMS[id])) : [];
+  // panels rebuild their markup when the state changes, so the choice is remembered by
+  // its data-* attributes (the recipe, the module, the chest row...) and found again
+  const keyOf = (el: HTMLElement) =>
+    el.getAttributeNames().filter((n) => n.startsWith('data-')).map((n) => `${n}=${el.getAttribute(n)}`).join('&');
+  const mark = (id: string | null, el: HTMLElement | null) => {
+    if (navSel !== el) navSel?.classList.remove('kbsel');
+    navSel = el;
+    navIn = id || '';
+    if (!el || !id) return;
+    el.classList.add('kbsel');
+    navKeys[id] = { key: keyOf(el), i: itemsOf(id).indexOf(el) };
+  };
+  /** Re-attach the keyboard choice after a rebuild; run every UI frame and before each key. */
+  const navSync = () => {
+    const id = navPanel();
+    setMenuCapture(!!id);
+    if (!id) return mark(null, null);
+    if (navSel?.isConnected && navIn === id && $(id).contains(navSel)) return;
+    const items = itemsOf(id);
+    const was = navKeys[id];
+    const el = (was && (items.find((x) => keyOf(x) === was.key) || items[Math.min(was.i, items.length - 1)])) || items[0] || null;
+    mark(id, el);
+  };
+  /** Move the choice to the nearest item on screen that way (lists, the bag's wrapped rows, the chest grid). */
+  const navMove = (id: string, dx: number, dy: number) => {
+    const items = itemsOf(id);
+    if (!items.length) { $(id).scrollTop += dy * 48; return; }   // the help sheet just scrolls
+    const cur = navSel && items.includes(navSel) ? navSel : null;
+    if (!cur) return mark(id, items[0]);
+    const r = cur.getBoundingClientRect();
+    let best: HTMLElement | null = null, bestScore = Infinity;
+    for (const el of items) {
+      if (el === cur) continue;
+      const q = el.getBoundingClientRect();
+      const ox = q.left + q.width / 2 - (r.left + r.width / 2), oy = q.top + q.height / 2 - (r.top + r.height / 2);
+      const along = ox * dx + oy * dy, across = Math.abs(dx ? oy : ox);
+      if (along <= 2 || (dx && across > r.height)) continue;   // left / right stay on the row
+      const score = along + across * 3;
+      if (score < bestScore) { bestScore = score; best = el; }
+    }
+    // nothing that way: step through in reading order, wrapping at the ends
+    if (!best) best = items[(items.indexOf(cur) + (dx + dy > 0 ? 1 : items.length - 1)) % items.length];
+    mark(id, best);
+    best.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  };
+
   const closeChestPanel = () => {
     chestOpenI = -1;
     chestSlots = {};
     chestSig = '';
-    $('chestPanel').style.display = 'none';
+    setOpen('chestPanel', false);
   };
-  const togglePanel = () => {
-    const p = $('craftPanel');
-    p.style.display = p.style.display === 'block' ? 'none' : 'block';
-    panelSig = '';
-  };
-  const toggleModal = (id: string) => {
-    const m = $(id);
-    m.style.display = m.style.display === 'block' ? 'none' : 'block';
-  };
-  const toggleBuildPanel = () => {
-    const p = $('buildPanel');
-    p.style.display = p.style.display === 'block' ? 'none' : 'block';
-    buildSig = '';
+  const togglePanel = () => setOpen('craftPanel', !isOpen('craftPanel'));
+  const toggleModal = (id: string) => setOpen(id, !isOpen(id));
+  const toggleBuildPanel = () => setOpen('buildPanel', !isOpen('buildPanel'));
+  const clearSelection = () => {
+    if (selected) { selected = null; invSig = ''; onSelectPlace(null); }
+    if (selectedMod) { selectedMod = null; buildSig = ''; onSelectModule(null); }
   };
   $('craftBtn').onclick = togglePanel;
   $('buildBtn').onclick = toggleBuildPanel;
   $('invBtn').onclick = () => toggleModal('invModal');
   $('helpBtn').onclick = () => toggleModal('helpModal');
-  document.addEventListener('keydown', (e) => {
-    if (e.repeat) return;
-    if (e.key === 'c' || e.key === 'C') togglePanel();
-    if (e.key === 'b' || e.key === 'B') toggleBuildPanel();
-    if (e.key === 'i' || e.key === 'I') toggleModal('invModal');
-    if (e.key === 'h' || e.key === 'H') toggleModal('helpModal');
-    if (e.key === 'Escape') {
-      $('invModal').style.display = 'none';
-      $('helpModal').style.display = 'none';
-      closeChestPanel();
-      if (selected) { selected = null; invSig = ''; onSelectPlace(null); }
-      if (selectedMod) { selectedMod = null; buildSig = ''; onSelectModule(null); }
+  $('controlsBtn').onclick = () => toggleModal('controlsModal');
+  mountControls($('controlsBody'));
+  // Clicking a HUD button or a panel entry must not leave the browser focus on it, or the
+  // next Space / Enter would press it again instead of reaching the game.
+  for (const id of ['btns', 'quickbar', 'inv', 'craftPanel', 'buildPanel', 'chestPanel', 'medicPanel', 'controlsModal'])
+    $(id).addEventListener('mousedown', (e) => e.preventDefault());
+  // The choice outline shows only while the keyboard is in use; the pointer hides it again.
+  document.addEventListener('keydown', () => document.body.classList.add('kb-nav'), true);
+  document.addEventListener('pointerdown', () => document.body.classList.remove('kb-nav'), true);
+  // Rebinding a key rewrites every label that names one: the static markup through
+  // data-key, the panels by dropping their signatures so they redraw.
+  const relabel = () => {
+    paintKeyLabels();
+    invSig = panelSig = buildSig = medicSig = chestSig = '';
+  };
+  window.addEventListener('hearth:keybinds', relabel);
+  relabel();
+
+  /**
+   * The panels' share of a key press (main.ts routes every in-game key press here first).
+   * True when the press was used up. Escape closes the newest panel; with none open it
+   * drops a pending placement and reports false so the scene clears its ghost as well.
+   */
+  const handleKey = (e: KeyboardEvent): boolean => {
+    if (e.code === 'Escape') {
+      const top = navPanel();
+      if (top === 'chestPanel') closeChestPanel();
+      else if (top) setOpen(top, false);
+      if (top) { navSync(); return true; }
+      clearSelection();
+      return false;
     }
-  });
+    navSync();
+    const id = navPanel();
+    if (id) {
+      const act = actionsFor(e.code).find(isMenuAction);
+      if (act === 'uiUp') navMove(id, 0, -1);
+      else if (act === 'uiDown') navMove(id, 0, 1);
+      else if (act === 'uiLeft') navMove(id, -1, 0);
+      else if (act === 'uiRight') navMove(id, 1, 0);
+      else if (act === 'uiConfirm') { if (!e.repeat) navSel?.click(); }
+      else if (act === 'uiNext' && !e.repeat) {
+        // hand the keyboard to the next panel that is showing
+        const open = stack.filter(isOpen);
+        if (open.length > 1) { stack = [id, ...stack.filter((x) => x !== id)]; navSync(); }
+      }
+      if (act) return true;
+    }
+    if (e.repeat) return false;
+    if (matches('inventory', e)) toggleModal('invModal');
+    else if (matches('craft', e)) togglePanel();
+    else if (matches('build', e)) toggleBuildPanel();
+    else if (matches('help', e)) toggleModal('helpModal');
+    else if (matches('controls', e)) toggleModal('controlsModal');
+    // the medic's own buttons do the checking (Accept is disabled when you cannot pay)
+    else if (matches('medicAccept', e) && medicOffer) $('medicPanel').querySelector<HTMLElement>('[data-medic-accept]')?.click();
+    else if (matches('medicDecline', e) && medicOffer) $('medicPanel').querySelector<HTMLElement>('[data-medic-decline]')?.click();
+    else return false;
+    navSync();
+    return true;
+  };
 
   // Delegated chest panel buttons — attached once, never rebuilt
   $('chestPanel').addEventListener('click', (e) => {
@@ -152,7 +274,7 @@ export function initUI(
       invSig = '';
       if (selected && selectedMod) { selectedMod = null; buildSig = ''; onSelectModule(null); }
       onSelectPlace(selected);
-      if (selected) $('invModal').style.display = 'none';   // clear the view for placing
+      if (selected) setOpen('invModal', false);   // clear the view for placing
     }
   });
   $('quickbar').addEventListener('click', (e) => {
@@ -181,7 +303,7 @@ export function initUI(
       chestOpenI = i;
       chestSlots = { ...slots };
       chestSig = '';
-      $('chestPanel').style.display = 'block';
+      setOpen('chestPanel', true);
     },
     updateChest(i: number, slots: Record<string, number>) {
       if (i !== chestOpenI) return;
@@ -190,12 +312,23 @@ export function initUI(
     },
     closeChest: closeChestPanel,
     isChestOpen: () => chestOpenI >= 0,
+    handleKey,
+    /** Close every window and drop any pending placement (quitting to the menu). */
+    closeAll() {
+      for (const id of ['invModal', 'helpModal', 'controlsModal']) setOpen(id, false);
+      closeChestPanel();
+      clearSelection();
+      navSync();
+    },
   };
 
   // see reset() above — the whole closure state, in one place
   resetSession = () => {
     closeChestPanel();
     selected = null;
+    selectedMod = null;
+    stack = [];
+    mark(null, null);
     invSig = ''; panelSig = '';
     medicOffer = null; medicSig = '';
     $('medicPanel').style.display = 'none';
@@ -219,7 +352,7 @@ export function initUI(
     let obj = '';
     if (st.won) obj = 'The Hearth is saved. Explore freely.';
     else if (st.waveSecs > 0) obj = 'Defend the World Engine from the Blight waves!';
-    else if (!st.structCount('workbench')) obj = 'Gather wood (E on trees) → craft & place a Workbench [C]';
+    else if (!st.structCount('workbench')) obj = `Gather wood (${keyLabel('interact')} on trees) → craft & place a Workbench [${keyLabel('craft')}]`;
     else if (!st.tools.has('axe')) obj = 'Craft a Wooden Axe at the Workbench (fiber from bushes)';
     else if (!st.structCount('campfire')) obj = 'Place a Campfire — heals you, cooks food, shields buildings from Blight Storms';
     else if (!st.tools.has('pick')) obj = 'Craft a Wooden Pickaxe (loose stones lie on the ground)';
@@ -228,7 +361,7 @@ export function initUI(
     else if (!st.structCount('forge')) obj = 'Mine Crystal in the Frozen Spire → build the Aether Forge';
     else if (st.mono.filter(Boolean).length < 4) obj = `Forge Monolith Cores (crystal + essence) and awaken all 4 Monoliths (${st.mono.filter(Boolean).length}/4)`;
     else obj = 'Build the World Engine at the Core Void center — then survive the final assault!';
-    $('objective').innerHTML = `🎯 ${obj}<br><span style="color:#9ab">Hunt animals 🥩, drink at lakes (E) 💧, cook at campfires</span>`;
+    $('objective').innerHTML = `🎯 ${obj}<br><span style="color:#9ab">Hunt animals 🥩, drink at lakes (${keyLabel('interact')}) 💧, cook at campfires</span>`;
 
     // inventory (modal) + quickbar — rebuild only when contents change
     // Task 4: add wornGear + selectedVehicle to signature
@@ -253,7 +386,7 @@ export function initUI(
             ? `<span class="slot" style="opacity:0.45">${icon(k)} ${NAMES[k]} ×${st.inv[k]} (reach land)</span>`
             : `<span class="slot tool ${sel ? 'sel' : ''}" data-veh="${k}" style="cursor:pointer">${icon(k)} ${NAMES[k]} ×${st.inv[k]}${sel ? ' ⛵ selected' : ' (select)'}</span>`;
         } else {
-          html += `<span class="slot">${icon(k)} ${NAMES[k]} ×${st.inv[k]}${k === 'torch' ? ' [T]' : ''}</span>`;
+          html += `<span class="slot">${icon(k)} ${NAMES[k]} ×${st.inv[k]}${k === 'torch' ? ` [${keyLabel('torch')}]` : ''}</span>`;
         }
       }
       for (const k of ['wall', 'campfire', 'workbench', 'forge', 'mineshaft', 'chest', 'bed', 'core', 'engine',
@@ -271,7 +404,7 @@ export function initUI(
         html += `<span class="slot place ${selected === k ? 'sel' : ''}" data-k="${k}">${icon(k)} ${NAMES[k] || k} ×${st.inv[k]}${r?.place ? ' 🔨' : ''}</span>`;
       }
       html += HOTBAR.filter((t) => st.tools.has(t)).map((t) =>
-        `<span class="slot tool ${st.equipped === t ? 'eq' : ''}" data-eq="${t}">[${HOTBAR.indexOf(t) + 1}] ${icon(t)} ${NAMES[t]}${st.equipped === t ? ' ✓' : ''}</span>`).join('');
+        `<span class="slot tool ${st.equipped === t ? 'eq' : ''}" data-eq="${t}">[${hotKey(t)}] ${icon(t)} ${NAMES[t]}${st.equipped === t ? ' ✓' : ''}</span>`).join('');
       // Task 4: gear slots are clickable to wear/unwear
       html += [...st.gear].map((t) =>
         `<span class="slot tool ${isWorn(st, t) ? 'eq' : ''}" data-wear="${t}">${icon(t)} ${NAMES[t]} ${isWorn(st, t) ? '✓ worn' : '(wear)'}</span>`
@@ -279,16 +412,18 @@ export function initUI(
       $('inv').innerHTML = html;
       // quickbar: equipped tools + quick consumables + owned cloaks
       let qb = HOTBAR.filter((t) => st.tools.has(t)).map((t) =>
-        `<span class="slot tool ${st.equipped === t ? 'eq' : ''}" data-eq="${t}">${HOTBAR.indexOf(t) + 1} ${icon(t)}</span>`).join('');
-      if (st.inv.water) qb += `<span class="slot use" data-use="water">${icon('water')}${st.inv.water}</span>`;
-      if (st.inv.cookedmeat) qb += `<span class="slot use" data-use="cookedmeat">${icon('cookedmeat')}${st.inv.cookedmeat}</span>`;
-      if (st.inv.bread) qb += `<span class="slot use" data-use="bread">${icon('bread')}${st.inv.bread}</span>`;
-      if (st.inv.glowcap) qb += `<span class="slot use" data-use="glowcap">${icon('glowcap')}${st.inv.glowcap}</span>`;
-      if (st.inv.medicine) qb += `<span class="slot use" data-use="medicine">${icon('medicine')}${st.inv.medicine}</span>`;
+        `<span class="slot tool ${st.equipped === t ? 'eq' : ''}" data-eq="${t}">${hotKey(t)} ${icon(t)}</span>`).join('');
+      // each quick slot wears the key that uses it: drink, the food eat would pick, medicine, cloak / armor
+      const food = EAT_ORDER.find((k) => st.inv[k]);
+      for (const k of ['water', 'cookedmeat', 'bread', 'glowcap', 'medicine'])
+        if (st.inv[k]) {
+          const key = k === 'water' ? kb('drink') : k === 'medicine' ? kb('medicine') : k === food ? kb('eat') : '';
+          qb += `<span class="slot use" data-use="${k}">${icon(k)}${st.inv[k]}${key}</span>`;
+        }
       // Task 4: cloaks in quickbar
       for (const t of CLOAKS) {
         if (st.gear.has(t)) {
-          qb += `<span class="slot tool ${isWorn(st, t) ? 'eq' : ''}" data-wear="${t}">${icon(t)}${isWorn(st, t) ? '✓' : ''}</span>`;
+          qb += `<span class="slot tool ${isWorn(st, t) ? 'eq' : ''}" data-wear="${t}">${icon(t)}${isWorn(st, t) ? '✓' : ''}${kb(t === 'starmetal_armor' ? 'armor' : 'cloak')}</span>`;
         }
       }
       $('quickbar').innerHTML = qb;
@@ -300,7 +435,7 @@ export function initUI(
       if (cSig !== chestSig) {
         chestSig = cSig;
         const CHEST_RES = ['wood','stone','fiber','crystal','essence','iron','diamond','starmetal'] as const;
-        let cHtml = '<b>📦 Chest Storage</b> <span style="color:#888;font-size:11px">(ESC closes)</span><br><br>';
+        let cHtml = `<b>📦 Chest Storage</b> <span style="color:#888;font-size:11px">(ESC closes · choose a button and press ${keyLabel('uiConfirm')})</span><br><br>`;
         cHtml += '<table style="width:100%;border-collapse:collapse">';
         cHtml += '<tr style="color:#aaa;font-size:11px"><th style="text-align:left">Resource</th><th>In Chest</th><th>In Bag</th><th></th></tr>';
         for (const r of CHEST_RES) {
@@ -334,8 +469,8 @@ export function initUI(
           `<b>🩺 A medic's offer</b><br>` +
           `Full healing for ${icon(medicOffer.resource)} ${medicOffer.amount} ${NAMES[medicOffer.resource] || medicOffer.resource}<br>` +
           `<span id="medicCountdown" style="color:#9ab;font-size:12px"></span><br><br>` +
-          `<button data-medic-accept ${canPay ? '' : 'disabled'}>Accept</button> ` +
-          `<button data-medic-decline>Decline</button>`;
+          `<button data-medic-accept ${canPay ? '' : 'disabled'}>Accept [${keyLabel('medicAccept')}]</button> ` +
+          `<button data-medic-decline>Decline [${keyLabel('medicDecline')}]</button>`;
       }
       const secsLeft = Math.max(0, Math.ceil((medicOffer.expiresAt - Date.now()) / 1000));
       const cdEl = document.getElementById('medicCountdown');
@@ -350,7 +485,7 @@ export function initUI(
       const psig = JSON.stringify([st.inv, [...st.tools], [...st.gear], st.nearWorkbench, st.nearForge, st.nearCampfire]);
       if (psig !== panelSig) {
         panelSig = psig;
-        let html = '<b>Crafting</b> <span style="color:#888">(C to close)</span><br>';
+        let html = `<b>Crafting</b> <span style="color:#888">(${keyLabel('craft')} to close)</span><br>`;
         for (const [key, r] of Object.entries(RECIPES) as [string, any][]) {
           if (r.tool && st.tools.has(key)) continue;
           if (r.gear && st.gear.has(key)) continue;
@@ -372,7 +507,7 @@ export function initUI(
       const bsig = JSON.stringify([st.inv, selectedMod, st.zone]);
       if (bsig !== buildSig) {
         buildSig = bsig;
-        let html = '<b>Building</b> <span style="color:#888">(B to close)</span><br>' +
+        let html = `<b>Building</b> <span style="color:#888">(${keyLabel('build')} to close · then ${keyLabel('place')} places in front)</span><br>` +
           '<span style="color:#8ab;font-size:11px">Paid for in crafted materials</span>';
         const order = ['floor', 'wall', 'fixture', 'decor'];
         const label: Record<string, string> = {
@@ -394,5 +529,6 @@ export function initUI(
         $('buildPanel').innerHTML = html;
       }
     }
+    navSync();   // a panel redrawn above gets its keyboard choice back
   }, api);
 }

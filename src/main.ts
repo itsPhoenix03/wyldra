@@ -30,6 +30,7 @@ import { GameAudio } from "./audio.ts";
 import { FolkView, type FolkHost } from "./folk.ts";
 import { creatureLookAt, sampleCreature, tickAnimalGait, tickCreatureGait, type LookTarget } from "./creatureGait.ts";
 import { getSetting } from "./settings.ts";
+import { actionsFor, isHeld, isMenuAction, isTyping, keyLabel, type Action } from "./keybinds.ts";
 import { ANI_VIEWS, HUMAN_CLIPS, KEEPER_PACK, NODE_SPR, POP_FRAME_MS, POP_RES, STRUCT_SPR, ZONE_PACKS, humanFrame, humanPack } from "./assets.ts";
 import { BOOT_PACKS, packBitmap } from "./atlasData.ts";
 import { PackLoader } from "./atlas.ts";
@@ -56,6 +57,8 @@ const DEV_OFF_MSG =
   "Dev tools are not enabled for this session. Run `npm run start:dev` to grant them on " +
   "this machine, or allowlist a named account with HEARTH_DEV_TOKS.";
 const STORY_OFF: Record<string, number> = { wall: 25 };
+/** The tool each hotbar key equips, in key order (ui.ts lists the same five). */
+const HOTBAR = ["axe", "pick", "spick", "sword", "isword"];
 const MAX_LVL: Record<string, number> = { wall: 2 };
 
 /** A medic and its hut, exactly as the Go server sends them in `init` (§3). */
@@ -379,7 +382,8 @@ class Hearth extends Phaser.Scene {
   notes: { x: number; y: number; text: string }[] = [];
   furnSpr = new Map<number, Phaser.GameObjects.Image>();
   exitSpr = new Map<number, Phaser.GameObjects.Image>();
-  keys!: any;
+  /** Placement aims at the tile in front of the keeper (keyboard) rather than under the pointer. */
+  aimKeys = false;
   nightRect!: Phaser.GameObjects.Rectangle;
   ghost: Phaser.GameObjects.Sprite | null = null;
   placing: string | null = null;
@@ -508,45 +512,9 @@ class Hearth extends Phaser.Scene {
     if (LEGACY) this.connectLegacy();
     else this.connectViaControlPlane();
 
-    this.keys = this.input.keyboard!.addKeys(
-      "W,A,S,D,UP,LEFT,DOWN,RIGHT,E,SPACE",
-    );
-    this.input.keyboard!.on("keydown-SPACE", () => this.jump());
-    this.input.keyboard!.on("keydown-F", () => this.attack());
-    this.input.keyboard!.on("keydown-ESC", () => {
-      this.setPlacing(null);
-      this.setPlacingMod(null);
-    });
-    this.input.keyboard!.on("keydown-R", () => {
-      const tex = this.rotatingTex();
-      if (!tex) return;
-      this.placeDir = (this.placeDir + 1) % facingCount(tex);
-      this.faceGhost();
-    });
-    this.input.keyboard!.on("keydown-T", () => {
-      if (this.z === 1 && this.inv.torch > 0) {
-        this.me.playAction({ name: "torch", tool: null });   // kneel and plant it
-        this.send({ t: "torch" });
-      }
-      else if (this.z === 1) showMsg("Craft torches first (2 wood + 1 fiber).");
-    });
-    const HOTBAR = ["axe", "pick", "spick", "sword", "isword"];
-    this.input.keyboard!.on("keydown", (e: KeyboardEvent) => {
-      this.audio.start(); // audio unlocks on first gesture
-      const n = parseInt(e.key);
-      if (n >= 1 && n <= 5) this.setEquip(HOTBAR[n - 1]);
-      if (e.key === "m" || e.key === "M")
-        showMsg(this.audio.toggleMute() ? "🔇 Muted" : "🔊 Sound on", 1000);
-      if (e.key === "F9") {
-        if (this.devEnabled) this.send({ t: "dev" });
-        else showMsg(DEV_OFF_MSG, 5000);
-      }
-      if (e.key === "F10") {
-        e.preventDefault();
-        const d = document.getElementById("devPanel")!;
-        d.style.display = d.style.display === "block" ? "none" : "block";
-      }
-    });
+    // Keys arrive through onKey() (routed from the page-level listener at the bottom of
+    // this file, after the panels have had their share); held keys are read in update().
+    this.input.on("pointermove", () => (this.aimKeys = false));
     this.buildDevPanel();
     this.applyDevAccess(); // honest from the start; `init` re-applies with the real claim
     // re-clamp the view whenever the canvas changes size (window resize OR browser zoom)
@@ -1485,6 +1453,122 @@ class Hearth extends Phaser.Scene {
     scratch.destroy();
   }
 
+  /**
+   * The scene's share of a key press, after ui.ts has taken the panel keys. True when the
+   * key is one of the game's, so the page can stop the browser's default (Space
+   * scrolling, Tab moving focus). Movement and gathering are read as held keys in update().
+   */
+  onKey(e: KeyboardEvent): boolean {
+    this.audio.start(); // audio unlocks on first gesture
+    if (e.code === "F9") {
+      if (this.devEnabled) this.send({ t: "dev" });
+      else showMsg(DEV_OFF_MSG, 5000);
+      return true;
+    }
+    if (e.code === "F10") {
+      const d = document.getElementById("devPanel")!;
+      d.style.display = d.style.display === "block" ? "none" : "block";
+      return true;
+    }
+    if (e.code === "Escape") {
+      this.setPlacing(null);
+      this.setPlacingMod(null);
+      return false;
+    }
+    const a = actionsFor(e.code).find((x) => !isMenuAction(x));
+    if (!a) return false;
+    if (a.startsWith("move")) this.aimKeys = true;   // walking with the keys: the ghost sits in front
+    else if (!e.repeat) this.runAction(a);
+    return true;
+  }
+
+  private runAction(a: Action) {
+    switch (a) {
+      case "jump": return this.jump();
+      case "attack": return this.attack();
+      case "place":
+        this.aimKeys = true;
+        return this.placeAhead();
+      case "rotate": {
+        const tex = this.rotatingTex();
+        if (!tex) return;
+        this.placeDir = (this.placeDir + 1) % facingCount(tex);
+        this.faceGhost();
+        return;
+      }
+      case "torch":
+        if (this.z === 1 && this.inv.torch > 0) {
+          this.me.playAction({ name: "torch", tool: null });   // kneel and plant it
+          this.send({ t: "torch" });
+        }
+        else if (this.z === 1) showMsg("Craft torches first (2 wood + 1 fiber).");
+        return;
+      case "hotbar1": case "hotbar2": case "hotbar3": case "hotbar4": case "hotbar5":
+        return this.setEquip(HOTBAR[+a.slice(-1) - 1]);
+      case "drink": return this.drink();
+      case "eat": return this.eat();
+      case "medicine":
+        if (this.inv.medicine > 0) this.send({ t: "use", k: "medicine" });
+        else showMsg("No medicine — craft Herbal Medicine at a campfire (4 fiber + 1 water).", 2500);
+        return;
+      case "cloak": return this.cycleCloak();
+      case "armor":
+        if (this.gear.has("starmetal_armor")) this.setWear("starmetal_armor");
+        else showMsg("You have no Starmetal armor yet.", 2000);
+        return;
+      case "boat": return this.cycleBoat();
+      case "mute":
+        showMsg(this.audio.toggleMute() ? "🔇 Muted" : "🔊 Sound on", 1000);
+        return;
+    }
+  }
+
+  // The item keys are pickier than a click on the slot: they will not waste a drink or a
+  // meal on a full stomach (the server tops the bar at 10 and keeps the item).
+  drink() {
+    if (!(this.inv.water > 0)) showMsg(`No water — collect some at a shore (${keyLabel("interact")}).`, 2000);
+    else if (this.thirst >= 10) showMsg("You are not thirsty.", 1500);
+    else this.send({ t: "use", k: "water" });
+  }
+
+  eat() {
+    // most filling first: cooked meat +5, bread +4, glowcap +2 (and 1 HP)
+    const k = ["cookedmeat", "bread", "glowcap"].find((f) => this.inv[f] > 0);
+    if (!k) showMsg("Nothing to eat — hunt, then cook the meat at a campfire.", 2000);
+    else if (this.hunger >= 10) showMsg("You are not hungry.", 1500);
+    else this.send({ t: "use", k });
+  }
+
+  /** Next owned cloak, then none: heat → fur → bare. */
+  cycleCloak() {
+    const owned = ["heatcloak", "furcloak"].filter((k) => this.gear.has(k));
+    if (!owned.length) return showMsg("You have no cloak yet — craft a Heat or Fur Cloak.", 2000);
+    this.setWear(owned[owned.indexOf(this.wornGear ?? "") + 1] ?? null);
+  }
+
+  /** Ready the next owned boat, then none. */
+  cycleBoat() {
+    const owned = (["boat", "sboat"] as const).filter((k) => this.inv[k] > 0);
+    if (!owned.length) return showMsg("You have no boat yet — craft one first.", 2000);
+    const next = owned[owned.indexOf(this.selectedVehicle as "boat") + 1];
+    this.selectVehicle(next ?? this.selectedVehicle!);
+  }
+
+  /** Toggle the boat to sail in; boats launch from shore, so never from the water. */
+  selectVehicle(k: "boat" | "sboat") {
+    if (this.swimming || this.sailing) {
+      showMsg("You cannot ready a boat in the water — reach land first!", 2500);
+      return;
+    }
+    this.selectedVehicle = this.selectedVehicle === k ? null : k;
+    showMsg(
+      this.selectedVehicle
+        ? `⛵ ${NAMES[k]} selected — walk into the sea to sail.`
+        : "Vehicle deselected. You will swim.",
+      2000,
+    );
+  }
+
   jump() {
     if (!this.ready || this.jumpT >= 0 || this.sailing || this.swimming) return;
     this.jumpT = 0;
@@ -1683,7 +1767,8 @@ class Hearth extends Phaser.Scene {
       const rotable = !!this.rotatingTex();
       this.faceGhost();
       showMsg(
-        `Placing ${NAMES[kind] || kind} — click a tile (ESC cancels${rotable ? ", R rotates" : ""}${kind === "wall" ? ", click existing to stack" : ""})`,
+        `Placing ${NAMES[kind] || kind} — click a tile or press ${keyLabel("place")} to place in front of you` +
+          ` (ESC cancels${rotable ? `, ${keyLabel("rotate")} rotates` : ""}${kind === "wall" ? ", place on a wall to stack" : ""})`,
       );
     }
   }
@@ -1706,8 +1791,8 @@ class Hearth extends Phaser.Scene {
       .map(([k, v]) => `${v} ${NAMES[k] || k}`)
       .join(", ");
     showMsg(
-      `Building ${NAMES[kind] || kind} (${cost}) — click a tile` +
-        ` (ESC cancels${ROTATABLE_MODS.has(kind) ? ", R rotates" : ""})`,
+      `Building ${NAMES[kind] || kind} (${cost}) — click a tile or press ${keyLabel("place")} to build in front of you` +
+        ` (ESC cancels${ROTATABLE_MODS.has(kind) ? `, ${keyLabel("rotate")} rotates` : ""})`,
     );
   }
 
@@ -1733,10 +1818,32 @@ class Hearth extends Phaser.Scene {
     return (MODULES as any)[kind]?.slot ?? "floor";
   }
 
+  /** The tile a placement would land on: under the pointer, or in front of the keeper when the keys aim. */
+  placeTarget(): { x: number; y: number } {
+    if (this.aimKeys) return { x: (this.px | 0) + this.faceX, y: (this.py | 0) + this.faceY };
+    const wp = this.cameras.main.getWorldPoint(this.input.activePointer.x, this.input.activePointer.y);
+    return this.unIso(wp.x, wp.y);
+  }
+
   onClick(ptr: Phaser.Input.Pointer) {
+    this.aimKeys = false;
+    const wp = this.cameras.main.getWorldPoint(ptr.x, ptr.y);
+    const { x, y } = this.unIso(wp.x, wp.y);
+    this.placeAt(x, y);
+  }
+
+  /** The place key: put the selected piece on the tile in front of the keeper. */
+  placeAhead() {
+    if (!this.placing && !this.placingMod) {
+      showMsg(`Nothing to place — choose a 🔨 item in the Bag (${keyLabel("inventory")}) or a piece in Building (${keyLabel("build")}).`, 2500);
+      return;
+    }
+    const { x, y } = this.placeTarget();
+    this.placeAt(x, y);
+  }
+
+  placeAt(x: number, y: number) {
     if (this.ready && this.placingMod) {
-      const wp = this.cameras.main.getWorldPoint(ptr.x, ptr.y);
-      const { x, y } = this.unIso(wp.x, wp.y);
       if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) return;
       if (this.z !== 0) {
         showMsg("Modular building only works outdoors.");
@@ -1753,8 +1860,6 @@ class Hearth extends Phaser.Scene {
       return;
     }
     if (!this.ready || !this.placing) return;
-    const wp = this.cameras.main.getWorldPoint(ptr.x, ptr.y);
-    const { x, y } = this.unIso(wp.x, wp.y);
     if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) return;
     // FEATURE 2: furniture can also be placed in mines (z===1)
     if (this.z !== 0) {
@@ -1875,7 +1980,7 @@ class Hearth extends Phaser.Scene {
       }
       this.ready = true;
       showMsg(
-        "You are a Keeper. Follow the objective tracker (top right). Press C to craft.",
+        `You are a Keeper. Follow the objective tracker (top right). Press ${keyLabel("craft")} to craft, ${keyLabel("controls")} for the controls.`,
         6000,
       );
     } else if (m.t === "chunk") {
@@ -3904,9 +4009,8 @@ class Hearth extends Phaser.Scene {
     if (!this.ready) return;
     this.streamZones(t);
     const dt = Math.min(dtMs / 1000, 0.05);
-    const k = this.keys;
-    let dx = +(k.D.isDown || k.RIGHT.isDown) - +(k.A.isDown || k.LEFT.isDown);
-    let dy = +(k.S.isDown || k.DOWN.isDown) - +(k.W.isDown || k.UP.isDown);
+    let dx = +isHeld("moveRight") - +isHeld("moveLeft");
+    let dy = +isHeld("moveDown") - +isHeld("moveUp");
     // suppress input during knockback tween (Guide §2.3)
     if (t < this.knockedUntil) {
       dx = 0;
@@ -3953,7 +4057,7 @@ class Hearth extends Phaser.Scene {
       if (inTile(this.px, ny) || !this.blockedAt(this.px, ny))
         this.py = Math.max(0, Math.min(SIZE - 1, ny));
     }
-    if (k.E.isDown) this.interact();
+    if (isHeld("interact")) this.interact();
     this.me.tick(dt);
     // jump window (the visible hop is the rig's jump clip, same 0.45s)
     if (this.jumpT >= 0) {
@@ -4152,11 +4256,7 @@ class Hearth extends Phaser.Scene {
 
     // ghost placement preview — modular first: it uses slot geometry, not recipes
     if (this.ghost && this.placingMod) {
-      const wp = this.cameras.main.getWorldPoint(
-        this.input.activePointer.x,
-        this.input.activePointer.y,
-      );
-      const g = this.unIso(wp.x, wp.y);
+      const g = this.placeTarget();
       const slot = this.modSlotFor(this.placingMod);
       const pl = this.modPlacement(slot, g.x, g.y);
       this.ghost.setPosition(pl.x, pl.y).setOrigin(pl.ox, pl.oy);
@@ -4185,11 +4285,7 @@ class Hearth extends Phaser.Scene {
         this.z === 0 && free && Math.hypot(g.x - this.px, g.y - this.py) <= 6;
       this.ghost.setTint(ok ? 0x88ff88 : 0xff6666);
     } else if (this.ghost) {
-      const wp = this.cameras.main.getWorldPoint(
-        this.input.activePointer.x,
-        this.input.activePointer.y,
-      );
-      const g = this.unIso(wp.x, wp.y);
+      const g = this.placeTarget();
       const gp = this.isoE(g.x, g.y);
       const pR = (RECIPES as any)[this.placing!];
       if (pR?.flat) this.ghost.setPosition(gp.x, gp.y).setOrigin(0.5, 0.5);
@@ -4417,6 +4513,7 @@ const GAME_DOM_IDS = [
   "quickbar",
   "btns",
   "craftPanel",
+  "buildPanel",
   "chestPanel",
   "medicPanel",
 ];
@@ -4447,22 +4544,7 @@ function getUiApi(): ReturnType<typeof initUI> {
     (k) => activeScene?.send({ t: "use", k }),
     (k) => activeScene?.setEquip(k),
     (k) => activeScene?.setWear(k),
-    (k) => {
-      const s = activeScene;
-      if (!s) return;
-      // TASK 4a: toggle selected vehicle — but never from the water: boats launch from shore
-      if (s.swimming || s.sailing) {
-        showMsg("You cannot ready a boat in the water — reach land first!", 2500);
-        return;
-      }
-      s.selectedVehicle = s.selectedVehicle === k ? null : k;
-      showMsg(
-        s.selectedVehicle
-          ? `⛵ ${NAMES[k]} selected — walk into the sea to sail.`
-          : "Vehicle deselected. You will swim.",
-        2000,
-      );
-    },
+    (k) => activeScene?.selectVehicle(k),
     (i, res, n) => activeScene?.send({ t: "chest_move", i, res, n }),
     (medicId, offerId) =>
       activeScene?.send({ t: "medic", medicId, action: "accept", offerId }),
@@ -4484,14 +4566,11 @@ export function quitToMenu(opts: { confirm?: boolean; error?: string } = {}) {
 
   const sc = activeScene;
 
-  // 1. Let ui.ts drop its own panel/selection state through the handler it already owns
-  //    (no import coupling): its Escape branch closes the modals + chest and clears any
-  //    pending placement. Phaser's own keydown-ESC (setPlacing(null)) also sees this and
-  //    clears the placement ghost — both while the scene is still alive.
-  document.dispatchEvent(
-    new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-  );
-  uiApiSingleton?.closeChest();
+  // 1. Close every panel and drop any pending placement (ui.ts calls back into the
+  //    scene to clear the ghost) while the scene is still alive.
+  uiApiSingleton?.closeAll();
+  sc?.setPlacing(null);
+  sc?.setPlacingMod(null);
 
   // 2. Socket down, silently. Handlers are nulled *and* the scene flag is set, so neither
   //    a late frame nor the close event can raise the "Disconnected" toast.
@@ -4568,6 +4647,14 @@ export function quitToMenu(opts: { confirm?: boolean; error?: string } = {}) {
 document.addEventListener("click", (e) => {
   const t = e.target as HTMLElement | null;
   if (t?.closest?.("#quitBtn")) quitToMenu();
+});
+
+// Every in-game key press, registered once per page like the click above: the panels take
+// theirs first (ui.ts handleKey), the live scene the rest. Bindings live in keybinds.ts.
+document.addEventListener("keydown", (e) => {
+  const sc = activeScene;
+  if (!sc || isTyping(e)) return;
+  if (uiApiSingleton?.handleKey(e) || sc.onKey(e)) e.preventDefault();
 });
 
 /** Decoded boot atlases, installed by create(); decoding is off the main thread (atlasData.ts). */

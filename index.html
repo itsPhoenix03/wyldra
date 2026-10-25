@@ -75,6 +75,25 @@
     #medicPanel button { background: #2a3a4a; color: #fff; border: 1px solid #57a; border-radius: 4px;
                          padding: 5px 12px; font-family: monospace; cursor: pointer; margin-top: 4px; }
     #medicPanel button:disabled { opacity: 0.4; cursor: default; }
+    /* keyboard choice in a panel (ui.ts navSync); shown only while the keys are in use */
+    body.kb-nav .kbsel { outline: 2px solid #ffd97a; outline-offset: 1px; box-shadow: 0 0 10px rgba(255,217,122,.45); }
+    .slot .kb { margin-left: 4px; padding: 0 3px; border-radius: 3px; font-size: 10px; color: #cde; background: #2a3a4a; border: 1px solid #57a; }
+    #controlsModal { width: 520px; }
+
+    /* ---- key-binding editor (src/controlsUI.ts): the in-game window and the title screen's Controls page ---- */
+    .kb-list { display: grid; grid-template-columns: 1fr auto auto; gap: 4px 8px; align-items: center; }
+    .kb-group { grid-column: 1 / -1; margin: 12px 0 2px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8ab; }
+    .kb-group:first-child { margin-top: 0; }
+    .kb-name { font-size: 13px; }
+    .kb-key { min-width: 84px; padding: 4px 8px; font: 12px monospace; color: #fff; background: #2a3a4a;
+              border: 1px solid #57a; border-radius: 4px; cursor: pointer; }
+    .kb-key:hover { border-color: #9cf; }
+    .kb-key.empty { color: #667; }
+    .kb-key.listening { border-color: #ffd97a; color: #ffd97a; background: #3a3420; }
+    .kb-status { min-height: 1.3em; margin: 10px 0 0; color: #ffd97a; font-size: 12px; }
+    .kb-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; }
+    .kb-note { color: #889; font-size: 11px; line-height: 1.4; }
+    .kb-reset { flex: none; }
 
     /* ================================================================
        TITLE SCREEN — a game title screen: the logo and a vertical menu on the
@@ -240,60 +259,199 @@
     #menu button.menu-primary:hover { color: #2a1203; border-color: #fff4d6; }
     #menu button.menu-back { background: none; box-shadow: none; border-color: rgba(239,227,200,.18); color: #b9ad94; font-weight: 400; }
     #menu button.menu-back:hover { color: #efe3c8; border-color: rgba(239,227,200,.45); }
-    .menu-corner { position: absolute; z-index: 5; transition: opacity .25s ease, transform .25s ease; }
-    .corner-tr { top: 18px; right: 18px; }
-    #menu .menu-corner { padding: 8px 14px 8px 10px; border-radius: 999px; font-size: 14px; font-weight: 400; }
-    #menu .menu-corner img { width: 26px; height: 26px; }
+    /* the profile: a small sign hung on two ropes from the top of the screen, in the same
+       timber, nails and gold as the sub-screen boards; it sways when pointed at and is
+       hauled up out of sight while a board is open */
+    .menu-corner { position: absolute; z-index: 5; transition: opacity .25s ease, transform .35s cubic-bezier(.3,1.5,.5,1); }
+    .corner-tr { top: 28px; right: 26px; }
+    #menu .menu-corner {
+      isolation: isolate; gap: 11px; padding: 10px 20px 11px 11px; font-size: 14px; font-weight: 400;
+      border: 0; border-radius: 0; background: none; box-shadow: none;
+      transform-origin: 50% -28px; filter: drop-shadow(0 7px 6px rgba(0,0,0,.6));
+    }
+    #menu .menu-corner::before, #menu .menu-corner::after {
+      content: ""; position: absolute;
+      clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0 calc(100% - 8px), 0 8px);
+    }
+    #menu .menu-corner::before { inset: -2px; z-index: -2; background: #1f140c; }
+    #menu .menu-corner::after {
+      inset: 0; z-index: -1;
+      background:
+        linear-gradient(180deg, rgba(255,230,180,.3) 0 2px, transparent 2px calc(100% - 3px), rgba(0,0,0,.45) calc(100% - 3px)),
+        repeating-linear-gradient(90deg, rgba(0,0,0,.06) 0 1px, transparent 1px 7px),
+        linear-gradient(180deg, #93673f, #6c482c 55%, #563922);
+    }
+    .sign-ropes {   /* twisted rope, tied on behind the sign */
+      position: absolute; left: 22px; right: 22px; top: -32px; height: 38px; z-index: -3; pointer-events: none;
+      background:
+        repeating-linear-gradient(165deg, #9a7a4e 0 2px, #5c4329 2px 4px) left top / 3px 100% no-repeat,
+        repeating-linear-gradient(165deg, #9a7a4e 0 2px, #5c4329 2px 4px) right top / 3px 100% no-repeat;
+    }
+    #menu .menu-corner:hover { transform: rotate(-2.5deg); border-color: transparent; }
+    #menu .menu-corner:active { transform: rotate(-2.5deg) translateY(1px); }
+    #menu .menu-corner:focus-visible { outline: 2px solid #ffd166; outline-offset: 6px; }
+    #menu .menu-corner img {   /* the keeper in a brass-ringed slate socket */
+      width: 32px; height: 32px; padding: 3px; box-sizing: border-box; border-radius: 50%; object-fit: contain;
+      background: radial-gradient(circle at 50% 35%, #2a2e35, #121418);
+      box-shadow: 0 0 0 2px #c99a3c, 0 0 0 3px #1f140c, inset 0 2px 4px rgba(0,0,0,.7);
+    }
     .chip-text { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; text-align: left; }
-    .chip-text small { font-size: 11.5px; color: #a99f8a; font-style: italic; }
-    .chip-text b { font-size: 15px; color: #ffd166; font-weight: 600; max-width: 18ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #menu:not([data-screen="home"]) .menu-corner { opacity: 0; pointer-events: none; transform: translateY(-6px); }
+    .chip-text small { font-size: 11.5px; color: #d9c49b; font-style: italic; text-shadow: 0 1px 0 rgba(0,0,0,.5); }
+    .chip-text b { font-size: 15px; color: #ffd166; font-weight: 600; max-width: 18ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      text-shadow: 0 2px 0 #3d230e; }
+    #menu:not([data-screen="home"]) .menu-corner { opacity: 0; pointer-events: none; transform: translateY(-90px); }
 
-    /* ---- sub-screens: a slab of dusk over the dimmed world ---- */
+    /* ---- sub-screens: notice boards over the dimmed world ----
+       Each card is a board of dark planks in a timber frame with iron corner brackets,
+       in the colours of the game's own wood sprites (building_materials/wood_planks).
+       Its title is carved into a plaque nailed across the top edge; the board scrolls
+       inside the frame, so the plaque and the brackets never scroll away. */
     .menu-scrim { position: absolute; inset: 0; z-index: 4; pointer-events: none; opacity: 0; transition: opacity .25s ease;
       background: radial-gradient(80% 70% at 50% 50%, rgba(8,8,24,.62), rgba(4,4,14,.86)); }
     #menu:not([data-screen="home"]) .menu-scrim { opacity: 1; }
     .menu-screen { display: none; }
     .menu-screen.active { display: flex; flex-direction: column; }
     .menu-card {
-      position: relative; z-index: 6; gap: 14px; width: min(460px, 90vw); max-height: 88vh; overflow-y: auto;
-      padding: 26px 28px 24px; border-radius: 20px;
-      background: linear-gradient(180deg, rgba(36,30,72,.96), rgba(18,16,40,.97));
-      border: 1px solid rgba(109,214,200,.28);
-      box-shadow: 0 30px 80px rgba(0,0,0,.7), inset 0 1px 0 rgba(255,255,255,.06);
-      animation: card-in .35s cubic-bezier(.2,.8,.2,1);
+      --edge: #1f140c; --brass: #ffd166; --ink: #f1e3c4; --ink-dim: #c2ab86;
+      position: relative; z-index: 6; box-sizing: border-box; width: min(482px, calc(100vw - 40px)); max-height: 86vh; margin-top: 26px;
+      padding-top: 30px; border: 11px solid transparent; border-radius: 9px;
+      background:
+        /* four upright planks, each its own shade, with a dark seam between */
+        linear-gradient(90deg, transparent calc(25% - 1px), rgba(0,0,0,.42) calc(25% - 1px) 25%, rgba(255,214,160,.05) 25% calc(25% + 1px), transparent calc(25% + 1px)
+          calc(50% - 1px), rgba(0,0,0,.42) calc(50% - 1px) 50%, rgba(255,214,160,.05) 50% calc(50% + 1px), transparent calc(50% + 1px)
+          calc(75% - 1px), rgba(0,0,0,.42) calc(75% - 1px) 75%, rgba(255,214,160,.05) 75% calc(75% + 1px), transparent calc(75% + 1px)) padding-box,
+        repeating-linear-gradient(90deg, rgba(255,230,190,.022) 0 2px, transparent 2px 9px) padding-box,
+        linear-gradient(180deg, rgba(0,0,0,0), rgba(0,0,0,.25)) padding-box,
+        linear-gradient(90deg, #33231a 0 25%, #2c1e15 25% 50%, #35251b 50% 75%, #2e2017 75%) padding-box,
+        linear-gradient(180deg, #b38450 0%, #8a6040 16%, #6b4a2e 58%, #4a3322 100%) border-box;
+      box-shadow: 0 0 0 2px var(--edge), inset 0 0 0 2px var(--edge), inset 0 16px 30px rgba(0,0,0,.55), 0 34px 80px rgba(0,0,0,.75);
+      animation: board-in .4s cubic-bezier(.2,.9,.3,1.12);
     }
-    .menu-card::before { content: ""; position: absolute; top: -1px; left: 22%; right: 22%; height: 2px;
-      background: linear-gradient(90deg, transparent, #6dd6c8, transparent); }
-    #menu h2 { margin: 0 0 2px; font-size: 24px; font-weight: 600; color: #ffd166; display: flex; align-items: center; gap: 12px; }
-    #menu h2 img { width: 28px; height: 28px; }
-    #menu label { font-size: 14px; color: #b9ad94; }
-    #menu input[type="text"] {
-      background: rgba(6,6,20,.7); border: 1px solid rgba(109,214,200,.3); border-radius: 12px; color: #ffd166;
-      padding: 12px 14px; font: 600 18px/1.2 "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
-      box-shadow: inset 0 2px 6px rgba(0,0,0,.5);
+    .menu-card::before {   /* iron brackets over the frame's corners */
+      content: ""; position: absolute; inset: -15px; z-index: 2; pointer-events: none;
+      background: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28'><g transform=''><path d='M1 1h26v8H9v18H1z' fill='%233a332d' stroke='%23120e0b' stroke-width='1.6'/><path d='M3 3h22M3 3v22' stroke='%23706658' stroke-width='1'/><circle cx='5' cy='5' r='1.9' fill='%23a59a8a'/><circle cx='21' cy='5' r='1.5' fill='%23a59a8a'/><circle cx='5' cy='21' r='1.5' fill='%23a59a8a'/></g></svg>") top left / 28px no-repeat,
+        url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28'><g transform='translate(28 0) scale(-1 1)'><path d='M1 1h26v8H9v18H1z' fill='%233a332d' stroke='%23120e0b' stroke-width='1.6'/><path d='M3 3h22M3 3v22' stroke='%23706658' stroke-width='1'/><circle cx='5' cy='5' r='1.9' fill='%23a59a8a'/><circle cx='21' cy='5' r='1.5' fill='%23a59a8a'/><circle cx='5' cy='21' r='1.5' fill='%23a59a8a'/></g></svg>") top right / 28px no-repeat,
+        url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28'><g transform='translate(0 28) scale(1 -1)'><path d='M1 1h26v8H9v18H1z' fill='%233a332d' stroke='%23120e0b' stroke-width='1.6'/><path d='M3 3h22M3 3v22' stroke='%23706658' stroke-width='1'/><circle cx='5' cy='5' r='1.9' fill='%23a59a8a'/><circle cx='21' cy='5' r='1.5' fill='%23a59a8a'/><circle cx='5' cy='21' r='1.5' fill='%23a59a8a'/></g></svg>") bottom left / 28px no-repeat,
+        url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28'><g transform='translate(28 28) scale(-1 -1)'><path d='M1 1h26v8H9v18H1z' fill='%233a332d' stroke='%23120e0b' stroke-width='1.6'/><path d='M3 3h22M3 3v22' stroke='%23706658' stroke-width='1'/><circle cx='5' cy='5' r='1.9' fill='%23a59a8a'/><circle cx='21' cy='5' r='1.5' fill='%23a59a8a'/><circle cx='5' cy='21' r='1.5' fill='%23a59a8a'/></g></svg>") bottom right / 28px no-repeat;
     }
-    #menu input[type="text"]:focus { outline: none; border-color: #ffd166; box-shadow: inset 0 2px 6px rgba(0,0,0,.5), 0 0 0 3px rgba(255,209,102,.18); }
-    #menu input[type="text"]::placeholder { color: #4d4a6a; }
-    #menu-join-input { text-align: center; font-size: 26px !important; letter-spacing: .4em; text-indent: .4em; }
-    .menu-actions { display: flex; flex-direction: column; gap: 9px; margin-top: 4px; }
-    .menu-note { margin: 0; padding: 11px 14px; font-size: 14px; line-height: 1.55; color: #cfc4ad;
-      background: rgba(109,214,200,.07); border-left: 3px solid #6dd6c8; border-radius: 0 10px 10px 0; }
-    .menu-note b { display: block; margin-bottom: 3px; color: #6dd6c8; font-weight: 600; }
-    .menu-error { color: #ff9e9e; font-size: 14px; line-height: 1.5; margin: 0; }
-    #menu-profile-message { padding: 10px 12px; border-left: 3px solid #ff9e9e; background: rgba(255,120,120,.08); border-radius: 0 10px 10px 0; }
-    .menu-preview { font-size: 14px; color: #b9ad94; margin: 0; }
-    .menu-preview span { color: #ffd166; }
-    .menu-room-code { display: flex; align-items: center; justify-content: space-between; gap: 12px;
-      background: rgba(6,6,20,.7); border: 1px solid rgba(109,214,200,.3); border-radius: 14px; padding: 8px 8px 8px 18px; }
-    .menu-room-code span { font-size: 30px; font-weight: 600; letter-spacing: .3em; color: #ffd166; text-shadow: 0 0 18px rgba(255,209,102,.35); }
-    #menu-create-copy { padding: 9px 14px !important; font-size: 14px !important; }
-    .menu-toggle { display: flex !important; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer;
-      font-size: 16px !important; color: #efe3c8 !important; background: rgba(255,255,255,.03);
-      border: 1px solid rgba(109,214,200,.2); border-radius: 12px; }
-    .menu-toggle:hover { border-color: rgba(109,214,200,.5); }
-    .menu-toggle input { accent-color: #ffd166; width: 17px; height: 17px; }
+    .menu-card .board {
+      display: flex; flex-direction: column; gap: 14px; max-height: calc(86vh - 74px); overflow-y: auto;
+      padding: 8px 26px 22px; scrollbar-width: thin; scrollbar-color: #8a6040 transparent;
+    }
+    /* the title plaque: one board with its corners cut, a brass nail at each end */
+    #menu .menu-card h2 {
+      position: absolute; left: 50%; top: -38px; transform: translateX(-50%); z-index: 3; isolation: isolate;
+      display: flex; align-items: center; gap: 10px; margin: 0; padding: 11px 32px 12px 30px; white-space: nowrap;
+      font-size: 23px; font-weight: 600; color: var(--brass);
+      text-shadow: 0 2px 0 #3d230e, 0 0 14px rgba(255,186,84,.3);
+      filter: drop-shadow(0 7px 6px rgba(0,0,0,.6));
+    }
+    #menu .menu-card h2::before, #menu .menu-card h2::after {
+      content: ""; position: absolute; z-index: -1;
+      clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 10px, 100% calc(100% - 10px), calc(100% - 10px) 100%, 10px 100%, 0 calc(100% - 10px), 0 10px);
+    }
+    #menu .menu-card h2::after { inset: -2px; z-index: -2; background: var(--edge); }
+    #menu .menu-card h2::before {
+      inset: 0;
+      background:
+        radial-gradient(circle at 13px 50%, #f0d08a 0 1.6px, #8a6224 2.2px 3.4px, rgba(0,0,0,.5) 3.6px 4.4px, transparent 4.6px),
+        radial-gradient(circle at calc(100% - 13px) 50%, #f0d08a 0 1.6px, #8a6224 2.2px 3.4px, rgba(0,0,0,.5) 3.6px 4.4px, transparent 4.6px),
+        linear-gradient(180deg, rgba(255,230,180,.32) 0 2px, transparent 2px calc(100% - 3px), rgba(0,0,0,.45) calc(100% - 3px)),
+        repeating-linear-gradient(90deg, rgba(0,0,0,.06) 0 1px, transparent 1px 7px),
+        linear-gradient(180deg, #93673f, #6c482c 55%, #563922);
+    }
+    #menu .menu-card h2 img { width: 30px; height: 30px; filter: drop-shadow(0 2px 1px rgba(0,0,0,.5)); }
 
+    #menu .menu-card label { font-size: 14px; color: var(--ink-dim); margin-bottom: -7px; }
+    /* fields are slate set into the board */
+    #menu .menu-card input[type="text"], .menu-room-code {
+      background: linear-gradient(180deg, #15171b, #1e2127); border: 2px solid #0a0b0d; border-radius: 6px;
+      box-shadow: inset 0 3px 9px rgba(0,0,0,.75), 0 1px 0 rgba(255,220,170,.12);
+    }
+    #menu .menu-card input[type="text"] {
+      color: var(--brass); padding: 12px 14px; font: 600 18px/1.2 "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    }
+    #menu .menu-card input[type="text"]:focus { outline: none; border-color: #c99a3c; box-shadow: inset 0 3px 9px rgba(0,0,0,.75), 0 0 0 3px rgba(255,209,102,.2); }
+    #menu .menu-card input[type="text"]::placeholder { color: #4a4740; }
+    #menu-join-input { text-align: center; font-size: 26px !important; letter-spacing: .4em; text-indent: .4em; }
+    .menu-room-code { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 8px 8px 18px; }
+    .menu-room-code span { font-size: 30px; font-weight: 600; letter-spacing: .3em; color: var(--brass); text-shadow: 0 0 16px rgba(255,209,102,.3); }
+    .menu-actions { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }
+    /* a paper slip pinned to the board */
+    .menu-note { position: relative; margin: 2px 6px 0; padding: 18px 16px 12px; font-size: 14px; line-height: 1.55; color: #3a2814;
+      background: linear-gradient(180deg, #ead8aa, #d8bf8a); border-radius: 2px; transform: rotate(-.7deg);
+      box-shadow: 0 2px 0 rgba(0,0,0,.2), 0 8px 16px rgba(0,0,0,.45); }
+    .menu-note::before { content: ""; position: absolute; top: 6px; left: 50%; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%;
+      background: radial-gradient(circle at 35% 35%, #e2dccf, #7a7164 55%, #2d2924); box-shadow: 0 1px 1px rgba(0,0,0,.5); }
+    .menu-error { color: #ffab98; font-size: 14px; line-height: 1.5; margin: 0; }
+    #menu-profile-message { padding: 10px 12px; border-left: 3px solid #d46a5a; background: rgba(150,40,30,.22); border-radius: 0 6px 6px 0; }
+    .menu-preview { font-size: 14px; color: var(--ink-dim); margin: 0; }
+    .menu-preview span { color: var(--brass); }
+
+    /* buttons are planks that press in; the main action is a brass plate */
+    #menu .menu-card button {
+      border-radius: 6px; padding: 12px 18px; color: var(--ink); text-shadow: 0 1px 0 rgba(0,0,0,.6);
+      background: linear-gradient(180deg, #8d6342, #6b4a2e 60%, #5a3d26);
+      border: 2px solid var(--edge);
+      box-shadow: inset 0 1px 0 rgba(255,225,180,.35), inset 0 -2px 0 rgba(0,0,0,.25), 0 4px 0 var(--edge), 0 8px 14px rgba(0,0,0,.45);
+      transition: transform .07s ease, box-shadow .07s ease, filter .15s ease;
+    }
+    #menu .menu-card button:hover { transform: none; filter: brightness(1.13); color: #fff; border-color: var(--edge); }
+    #menu .menu-card button:active { transform: translateY(3px);
+      box-shadow: inset 0 1px 0 rgba(255,225,180,.3), inset 0 -2px 0 rgba(0,0,0,.25), 0 1px 0 var(--edge), 0 3px 6px rgba(0,0,0,.4); }
+    #menu .menu-card button:focus-visible { outline: 2px solid var(--brass); outline-offset: 4px; }
+    #menu .menu-card button.menu-primary {
+      color: #2a1406; text-shadow: 0 1px 0 rgba(255,240,200,.5); font-size: 17px; border-color: #5c3410;
+      background: linear-gradient(180deg, #ffe7a3, #ffc457 45%, #e7932f);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.65), inset 0 -2px 0 rgba(120,60,10,.35), 0 4px 0 #5c3410, 0 8px 20px rgba(240,150,50,.3);
+    }
+    #menu .menu-card button.menu-primary:hover { color: #2a1406; border-color: #5c3410; }
+    #menu .menu-card button.menu-primary:active {
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.6), inset 0 -2px 0 rgba(120,60,10,.35), 0 1px 0 #5c3410, 0 3px 8px rgba(240,150,50,.25); }
+    #menu .menu-card button.menu-back {
+      align-self: center; gap: 9px; padding: 8px 12px; font-weight: 400; color: var(--ink-dim);
+      background: none; border-color: transparent; box-shadow: none; text-shadow: none;
+    }
+    #menu .menu-card button.menu-back:hover { filter: none; color: var(--ink); border-color: transparent; }
+    #menu .menu-card button.menu-back:active { transform: none; box-shadow: none; }
+    .menu-card kbd { font: 600 11px/1 "Palatino Linotype", Palatino, Georgia, serif; padding: 3px 6px 4px; border-radius: 4px;
+      color: #2b1b0d; background: linear-gradient(180deg, #efe2c4, #d2bd93); border: 1px solid #5a4126; box-shadow: 0 2px 0 #5a4126; }
+    #menu-create-copy { padding: 9px 14px !important; font-size: 14px !important; }
+
+    /* settings: a row per option, a brass lever on the right */
+    .menu-toggle { display: flex !important; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 4px; cursor: pointer;
+      font-size: 17px !important; color: var(--ink) !important; margin: 0 !important;
+      border-bottom: 1px solid rgba(0,0,0,.55); box-shadow: 0 1px 0 rgba(255,214,160,.07); }
+    .menu-toggle:hover { color: #fff !important; }
+    .menu-toggle input { order: 2; appearance: none; -webkit-appearance: none; flex: none; position: relative; width: 50px; height: 26px; margin: 0;
+      border-radius: 13px; cursor: pointer; background: #16181c; border: 2px solid #0a0b0d;
+      box-shadow: inset 0 2px 5px rgba(0,0,0,.75), 0 1px 0 rgba(255,220,170,.1); transition: background .15s ease; }
+    .menu-toggle input::before { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+      background: radial-gradient(circle at 35% 30%, #fff1c4, #e3a948 55%, #8a5a1c); box-shadow: 0 2px 2px rgba(0,0,0,.55); transition: transform .15s ease; }
+    .menu-toggle input:checked { background: #3f7a3a; box-shadow: inset 0 2px 5px rgba(0,0,0,.45), 0 0 10px rgba(111,174,79,.3); }
+    .menu-toggle input:checked::before { transform: translateX(24px); }
+    .menu-toggle input:focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; }
+
+    /* controls: keycaps on the board */
+    #menu-controls { width: min(600px, calc(100vw - 40px)); }
+    #menu .kb-group { margin: 16px 0 4px; padding-bottom: 6px; font-size: 16px; font-style: italic; letter-spacing: 0; text-transform: none;
+      color: var(--brass); border-bottom: 1px solid rgba(0,0,0,.55); box-shadow: 0 1px 0 rgba(255,214,160,.07); }
+    #menu .kb-group:first-child { margin-top: 0; }
+    #menu .kb-name { color: var(--ink); font-size: 15px; }
+    #menu .kb-list { gap: 7px 10px; }
+    #menu .menu-card button.kb-key { min-width: 84px; padding: 7px 10px 8px; font-size: 14px; color: #2b1b0d; text-shadow: none;
+      background: linear-gradient(180deg, #f3e7cb, #d6c197); border: 1px solid #5a4126; border-radius: 6px;
+      box-shadow: inset 0 1px 0 #fffaf0, 0 3px 0 #5a4126, 0 5px 8px rgba(0,0,0,.4); }
+    #menu .menu-card button.kb-key:hover { color: #000; border-color: #5a4126; }
+    #menu .menu-card button.kb-key:active { transform: translateY(2px); box-shadow: inset 0 1px 0 #fffaf0, 0 1px 0 #5a4126, 0 2px 4px rgba(0,0,0,.4); }
+    #menu .menu-card button.kb-key.empty { color: #8c7759; background: rgba(0,0,0,.28); border: 1px dashed #6b5233; box-shadow: none; }
+    #menu .menu-card button.kb-key.listening { color: #2a1406; border-color: #5c3410; background: linear-gradient(180deg, #ffe7a3, #ffc457);
+      box-shadow: 0 3px 0 #5c3410, 0 0 16px rgba(255,200,90,.55); }
+    #menu .menu-card button.kb-reset { min-width: 0; color: var(--ink); text-shadow: 0 1px 0 rgba(0,0,0,.6); border: 2px solid var(--edge);
+      background: linear-gradient(180deg, #8d6342, #6b4a2e 60%, #5a3d26);
+      box-shadow: inset 0 1px 0 rgba(255,225,180,.35), 0 4px 0 var(--edge), 0 8px 14px rgba(0,0,0,.45); }
+    #menu .kb-status { color: var(--brass); font-size: 14px; }
+    #menu .kb-note { color: var(--ink-dim); font-size: 12.5px; font-style: italic; }
 
     /* ---- motion ---- */
     @keyframes twinkle { 0%, 100% { opacity: .95; } 50% { opacity: .35; } }
@@ -306,6 +464,7 @@
     @keyframes motes { from { transform: translate(0, 0); } to { transform: translate(40px, -780px); } }
     @keyframes col-in { from { opacity: 0; transform: translateY(-50%) translateX(-18px); } to { opacity: 1; transform: translateY(-50%); } }
     @keyframes card-in { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+    @keyframes board-in { from { opacity: 0; transform: translateY(-18px) rotate(-1.2deg); } to { opacity: 1; transform: none; } }
 
     @media (max-width: 860px) and (orientation: portrait) {
       #menu[data-frame="island"] .backdrop-wrap { left: 50%; top: 52%; width: 230vw; }
@@ -319,7 +478,7 @@
       #menu .main-menu .mm.play { font-size: 26px; }
       .mm-hint, .home-keys { display: none; }
       .home-foot { left: 0; right: 0; bottom: 12px; text-align: center; }
-      .corner-tr { top: 10px; right: 10px; }
+      .corner-tr { top: 24px; right: 12px; }
       #menu .menu-corner .chip-text small { display: none; }
     }
     @media (max-height: 580px) {
@@ -342,7 +501,7 @@
     /* Listed out rather than relying on `button` alone: the in-game panels declare
        `cursor: pointer` at ID specificity, which would otherwise win. */
     button, input, select, textarea, .menu-toggle, [data-back],
-    #menu button, #btns button, .recipe button, #chestPanel button, #medicPanel button, #devPanel button,
+    #menu button, #btns button, .recipe button, #chestPanel button, #medicPanel button, #devPanel button, .kb-key,
     .slot.place, .slot.tool, .slot.use {
       cursor: url('/sprites/cursor_pointer.svg') 2 1, pointer;
     }
@@ -368,6 +527,7 @@
     <div class="home-shade" aria-hidden="true"></div>
 
     <button id="menu-profile-btn" class="menu-corner corner-tr" title="Change your name">
+      <span class="sign-ropes" aria-hidden="true"></span>
       <img src="/sprites/keeper.svg" alt="" />
       <span class="chip-text"><small>Playing as</small><b id="menu-home-name"></b></span>
     </button>
@@ -384,7 +544,7 @@
           <button id="menu-play-btn" class="mm play sel" data-hint="Step into the shared world.">Play</button>
           <button id="menu-create-btn" class="mm" data-hint="Get a room code to share with friends.">Create room</button>
           <button id="menu-join-btn" class="mm" data-hint="Enter a friend's room code.">Join room</button>
-          <button id="menu-settings-btn" class="mm" data-hint="Sound, player names and the camera.">Settings</button>
+          <button id="menu-settings-btn" class="mm" data-hint="Sound, player names, the camera and the keys.">Settings</button>
         </nav>
         <p class="mm-hint" id="menu-hint" aria-live="polite">Step into the shared world.</p>
         <p class="home-keys"><kbd>↑</kbd> <kbd>↓</kbd> to choose, <kbd>Enter</kbd> to select</p>
@@ -396,55 +556,72 @@
 
     <div id="menu-create" class="menu-screen menu-card">
       <h2><img src="/sprites/campfire.svg" alt="" />Create room</h2>
-      <p class="menu-note"><b>Heads up</b>Room codes are not networked yet. The server hosts one
-        shared world, so anyone who joins right now lands in the same place as you,
-        whatever the code.</p>
-      <label>Your room code</label>
-      <div class="menu-room-code">
-        <span id="menu-create-code"></span>
-        <button id="menu-create-copy">Copy</button>
-      </div>
-      <div class="menu-actions">
-        <button id="menu-create-start" class="menu-primary">Start</button>
-        <button class="menu-back" data-back>Back</button>
+      <div class="board">
+        <p class="menu-note">Room codes don't separate worlds yet. There is one shared world, so
+          anyone who joins lands in the same place as you, whatever the code.</p>
+        <label>Your room code</label>
+        <div class="menu-room-code">
+          <span id="menu-create-code"></span>
+          <button id="menu-create-copy">Copy</button>
+        </div>
+        <div class="menu-actions">
+          <button id="menu-create-start" class="menu-primary">Start</button>
+          <button class="menu-back" data-back>Back <kbd>Esc</kbd></button>
+        </div>
       </div>
     </div>
 
     <div id="menu-join" class="menu-screen menu-card">
       <h2><img src="/sprites/lantern.svg" alt="" />Join room</h2>
-      <p class="menu-note"><b>Heads up</b>Room codes are not networked yet. The server hosts one
-        shared world, so joining with a code still puts you in the same world as
-        everyone else.</p>
-      <label for="menu-join-input">Room code</label>
-      <input id="menu-join-input" type="text" maxlength="6" placeholder="ABCDEF" autocomplete="off" />
-      <p id="menu-join-error" class="menu-error" hidden></p>
-      <div class="menu-actions">
-        <button id="menu-join-submit" class="menu-primary">Join</button>
-        <button id="menu-join-solo">Play in the shared world</button>
-        <button class="menu-back" data-back>Back</button>
+      <div class="board">
+        <p class="menu-note">Room codes don't separate worlds yet. Any code takes you to the one
+          shared world, the same place as everyone else.</p>
+        <label for="menu-join-input">Room code</label>
+        <input id="menu-join-input" type="text" maxlength="6" placeholder="ABCDEF" autocomplete="off" />
+        <p id="menu-join-error" class="menu-error" hidden></p>
+        <div class="menu-actions">
+          <button id="menu-join-submit" class="menu-primary">Join</button>
+          <button id="menu-join-solo">Play in the shared world</button>
+          <button class="menu-back" data-back>Back <kbd>Esc</kbd></button>
+        </div>
       </div>
     </div>
 
     <div id="menu-profile" class="menu-screen menu-card">
       <h2><img src="/sprites/keeper.svg" alt="" />Profile</h2>
-      <p id="menu-profile-message" class="menu-error" hidden></p>
-      <label for="menu-profile-input">Username</label>
-      <input id="menu-profile-input" type="text" maxlength="18" />
-      <p class="menu-preview">Appears as <span id="menu-profile-preview"></span></p>
-      <p id="menu-profile-error" class="menu-error" hidden></p>
-      <div class="menu-actions">
-        <button id="menu-profile-save" class="menu-primary">Save</button>
-        <button class="menu-back" data-back>Back</button>
+      <div class="board">
+        <p id="menu-profile-message" class="menu-error" hidden></p>
+        <label for="menu-profile-input">Username</label>
+        <input id="menu-profile-input" type="text" maxlength="18" />
+        <p class="menu-preview">Appears as <span id="menu-profile-preview"></span></p>
+        <p id="menu-profile-error" class="menu-error" hidden></p>
+        <div class="menu-actions">
+          <button id="menu-profile-save" class="menu-primary">Save</button>
+          <button class="menu-back" data-back>Back <kbd>Esc</kbd></button>
+        </div>
       </div>
     </div>
 
     <div id="menu-settings" class="menu-screen menu-card">
       <h2><img src="/sprites/workbench.svg" alt="" />Settings</h2>
-      <label class="menu-toggle"><input type="checkbox" id="menu-settings-sound" /> Sound</label>
-      <label class="menu-toggle"><input type="checkbox" id="menu-settings-names" /> Show player names</label>
-      <label class="menu-toggle" title="The camera leans toward ground hidden behind mountains and over ledges while you walk"><input type="checkbox" id="menu-settings-peek" /> Camera peek</label>
-      <div class="menu-actions">
-        <button class="menu-back" data-back>Back</button>
+      <div class="board">
+        <label class="menu-toggle"><input type="checkbox" id="menu-settings-sound" /> Sound</label>
+        <label class="menu-toggle"><input type="checkbox" id="menu-settings-names" /> Show player names</label>
+        <label class="menu-toggle" title="The camera leans toward ground hidden behind mountains and over ledges while you walk"><input type="checkbox" id="menu-settings-peek" /> Camera peek</label>
+        <div class="menu-actions">
+          <button id="menu-settings-controls">Controls</button>
+          <button class="menu-back" data-back>Back <kbd>Esc</kbd></button>
+        </div>
+      </div>
+    </div>
+
+    <div id="menu-controls" class="menu-screen menu-card">
+      <h2><img src="/sprites/workbench.svg" alt="" />Controls</h2>
+      <div class="board">
+        <div id="menu-controls-body"></div>
+        <div class="menu-actions">
+          <button class="menu-back" data-back-to="settings">Back <kbd>Esc</kbd></button>
+        </div>
       </div>
     </div>
   </div>
@@ -453,10 +630,11 @@
   <div id="msg"></div>
   <div id="quickbar"></div>
   <div id="btns">
-    <button id="invBtn">Bag [I]</button>
-    <button id="craftBtn">Craft [C]</button>
-    <button id="buildBtn">Build [B]</button>
-    <button id="helpBtn">? [H]</button>
+    <button id="invBtn">Bag [<span data-key="inventory"></span>]</button>
+    <button id="craftBtn">Craft [<span data-key="craft"></span>]</button>
+    <button id="buildBtn">Build [<span data-key="build"></span>]</button>
+    <button id="controlsBtn">Keys [<span data-key="controls"></span>]</button>
+    <button id="helpBtn">? [<span data-key="help"></span>]</button>
     <button id="quitBtn">Quit</button>
   </div>
   <div id="craftPanel"></div>
@@ -464,38 +642,47 @@
   <div id="chestPanel"><div class="chest-body"></div></div>
   <div id="medicPanel"></div>
   <div id="invModal" class="modal">
-    <h3>🎒 Inventory <span class="hint">(I or ESC to close · click a 🔨 item to place it)</span></h3>
+    <h3>🎒 Inventory <span class="hint">(<span data-key="inventory"></span> or ESC to close · click an item, or pick it with the arrows and <span data-key="uiConfirm"></span> · a chosen 🔨 item is placed with a click or <span data-key="place"></span>)</span></h3>
     <div id="inv"></div>
   </div>
   <div id="helpModal" class="modal">
-    <h3>❓ How to play <span class="hint">(H or ESC to close)</span></h3>
+    <h3>❓ How to play <span class="hint">(<span data-key="help"></span> or ESC to close · every key can be changed under Keys [<span data-key="controls"></span>])</span></h3>
     <table>
-      <tr><td><kbd>W A S D</kbd> / arrows</td><td>Move (mud slows you; cliffs need jumping; falls hurt)</td></tr>
-      <tr><td><kbd>SPACE</kbd></td><td>Jump — clears 2-level ledges</td></tr>
-      <tr><td><kbd>F</kbd></td><td>Attack monsters / animals · demolish structures and building pieces (half refund)</td></tr>
-      <tr><td><kbd>B</kbd></td><td>Build panel — floors, walls, fixtures and decor built from crafted materials. Walls fill their tile and keep creatures out; bridges cross water</td></tr>
-      <tr><td><kbd>E</kbd></td><td>Gather · read notes · enter/exit mines (your safe place — no weather, no creatures) · dig (underground) · awaken monoliths · collect water at shores</td></tr>
-      <tr><td><kbd>E</kbd> on farm plot</td><td>Plant (wheat needs 2 fiber, glowcap needs 1 essence) / harvest when fully grown</td></tr>
-      <tr><td><kbd>E</kbd> on a chest</td><td>Open shared chest storage — deposit and withdraw resources</td></tr>
-      <tr><td><kbd>E</kbd> near a medic</td><td>Bargain for full healing — pay the requested resource before the offer expires</td></tr>
-      <tr><td><kbd>C</kbd></td><td>Crafting menu (needs the right station nearby)</td></tr>
-      <tr><td><kbd>I</kbd></td><td>Inventory bag</td></tr>
-      <tr><td><kbd>1–5</kbd></td><td>Equip axe / pickaxe / stone pickaxe / sword / iron sword</td></tr>
-      <tr><td><kbd>T</kbd></td><td>Place a torch (inside mines)</td></tr>
-      <tr><td><kbd>R</kbd></td><td>Rotate wall while placing</td></tr>
-      <tr><td><kbd>M</kbd></td><td>Mute sound</td></tr>
+      <tr><td><kbd data-key="moveUp"></kbd> <kbd data-key="moveLeft"></kbd> <kbd data-key="moveDown"></kbd> <kbd data-key="moveRight"></kbd></td><td>Move (mud slows you; cliffs need jumping; falls hurt)</td></tr>
+      <tr><td><kbd data-key="jump"></kbd></td><td>Jump — clears 2-level ledges</td></tr>
+      <tr><td><kbd data-key="attack"></kbd></td><td>Attack monsters / animals · demolish structures and building pieces (half refund)</td></tr>
+      <tr><td><kbd data-key="build"></kbd></td><td>Build panel — floors, walls, fixtures and decor built from crafted materials. Walls fill their tile and keep creatures out; bridges cross water</td></tr>
+      <tr><td><kbd data-key="interact"></kbd></td><td>Gather · read notes · enter/exit mines (your safe place — no weather, no creatures) · dig (underground) · awaken monoliths · collect water at shores</td></tr>
+      <tr><td><kbd data-key="interact"></kbd> on farm plot</td><td>Plant (wheat needs 2 fiber, glowcap needs 1 essence) / harvest when fully grown</td></tr>
+      <tr><td><kbd data-key="interact"></kbd> on a chest</td><td>Open shared chest storage — deposit and withdraw resources</td></tr>
+      <tr><td><kbd data-key="interact"></kbd> near a medic</td><td>Bargain for full healing — <kbd data-key="medicAccept"></kbd> accepts, <kbd data-key="medicDecline"></kbd> declines</td></tr>
+      <tr><td><kbd data-key="craft"></kbd></td><td>Crafting menu (needs the right station nearby)</td></tr>
+      <tr><td><kbd data-key="inventory"></kbd></td><td>Inventory bag</td></tr>
+      <tr><td><kbd data-key="hotbar1"></kbd>–<kbd data-key="hotbar5"></kbd></td><td>Equip axe / pickaxe / stone pickaxe / sword / iron sword</td></tr>
+      <tr><td><kbd data-key="drink"></kbd> <kbd data-key="eat"></kbd> <kbd data-key="medicine"></kbd></td><td>Drink water · eat your most filling food · take medicine</td></tr>
+      <tr><td><kbd data-key="cloak"></kbd> <kbd data-key="armor"></kbd></td><td>Change cloak (heat → fur → none) · Starmetal armor on / off</td></tr>
+      <tr><td><kbd data-key="boat"></kbd></td><td>Ready a boat (press again for the next one, then none)</td></tr>
+      <tr><td><kbd data-key="place"></kbd></td><td>Place the chosen item or building piece on the tile in front of you</td></tr>
+      <tr><td><kbd data-key="rotate"></kbd></td><td>Rotate while placing</td></tr>
+      <tr><td><kbd data-key="torch"></kbd></td><td>Place a torch (inside mines)</td></tr>
+      <tr><td><kbd data-key="uiUp"></kbd> <kbd data-key="uiDown"></kbd> <kbd data-key="uiConfirm"></kbd></td><td>In an open panel: move the choice and pick it · <kbd data-key="uiNext"></kbd> switches between open panels · <kbd>Esc</kbd> closes the newest one</td></tr>
+      <tr><td><kbd data-key="mute"></kbd></td><td>Mute sound</td></tr>
       <tr><td><kbd>F9</kbd></td><td>Dev kit (only if server runs in dev mode)</td></tr>
-      <tr><td><kbd>Bag</kbd></td><td>Click a boat to SELECT it — you swim without one (slow, and hot/freezing seas hurt)</td></tr>
-      <tr><td><kbd>Bag</kbd> → cloak</td><td>Click a Heat Cloak or Fur Cloak to WEAR it — owning it is not enough, you must equip it</td></tr>
+      <tr><td><kbd>Bag</kbd></td><td>Select a boat to SAIL — you swim without one (slow, and hot/freezing seas hurt)</td></tr>
+      <tr><td><kbd>Bag</kbd> → cloak</td><td>Choose a Heat Cloak or Fur Cloak to WEAR it — owning it is not enough, you must equip it</td></tr>
     </table>
     <p><b>Survival:</b> eat (hunt + cook at campfire) and drink (E at water, click 💧) or you'll starve.
     Campfires heal you, set your respawn, and shield wooden buildings from night Blight Storms.
     Herbal Medicine (craft at a campfire: 4 fiber + 1 water) heals 3 HP on the spot — or find a medic on the Woods or Spire and bargain for a full heal instead.
     Deserts need a Heat Cloak, snow needs a Fur Cloak. Shelter beside structures in sandstorms; reach a campfire in blizzards.</p>
-    <p><b>Building:</b> open the bag, click a 🔨 item, then click a tile. Click an existing wall to stack it higher. Walls block monsters; brutes smash them.
+    <p><b>Building:</b> open the bag, choose a 🔨 item, then click a tile — or press <kbd data-key="place"></kbd> to place it in front of you. Click an existing wall to stack it higher. Walls block monsters; brutes smash them.
     Place farm plots outdoors to grow wheat and glowcap. Decor items (banners, rugs, vases, fences) are zone-restricted — your Bag shows a hint when they cannot be placed. Mines can be furnished as underground hideouts: place chests and beds inside dug tunnels.</p>
     <p><b>Boats:</b> craft one, open your Bag, click the boat to SELECT it, then walk into the sea to sail. Without a selected boat you will swim — much slower, and hot or freezing seas deal damage over time. Icebergs destroy wooden boats — a Starmetal-reinforced hull smashes through.</p>
     <p><b>Goal:</b> follow the hidden notes 📜 across five distant islands, awaken all 4 Monoliths with forged Cores, build the World Engine at the Core Void, survive the final assault.</p>
+  </div>
+  <div id="controlsModal" class="modal">
+    <h3>⌨ Controls <span class="hint">(<span data-key="controls"></span> or ESC to close · also under Settings on the title screen)</span></h3>
+    <div id="controlsBody"></div>
   </div>
   <script type="module" src="/src/boot.ts"></script>
 </body>
