@@ -1,6 +1,7 @@
 package room
 
 import (
+	"slices"
 	"testing"
 
 	"hearth/gameserver/world"
@@ -185,3 +186,53 @@ func TestBuildOverAMineDropsIntoIt(t *testing.T) {
 		t.Fatal("the builder was not told the entrance opens into a mine")
 	}
 }
+
+// A new entrance comes with a torch beside its ladder; a mine already lit
+// there gets no second one.
+func TestNewEntranceIsLit(t *testing.T) {
+	f := newFixture(t)
+	x, y := mineSite(t, f)
+	f.r.openShaft(x, y)
+	if got := f.r.lightShaft(x, y); got != at(x, y-1) || !f.r.torches[got] {
+		t.Fatalf("the torch went to %d, want the carved tile behind the ladder %d", got, at(x, y-1))
+	}
+	if got := f.r.lightShaft(x, y); got != -1 {
+		t.Fatalf("a lit entrance got a second torch at %d", got)
+	}
+}
+
+// A village fire is a campfire: it heals, warms, cooks and keeps the night back.
+func TestVillageFireIsACampfire(t *testing.T) {
+	f := newFixture(t)
+	if len(f.r.camps) == 0 {
+		f.r.setupCamps()
+	}
+	if len(f.r.camps) == 0 {
+		t.Fatal("hearth-1 has no village camps, which cannot be right")
+	}
+	c := f.r.camps[0]
+	f.place(float64(c.FireX)+2, float64(c.FireY), 0)
+	if !f.r.nearStruct(f.p, "campfire", 4) {
+		t.Fatal("standing by a village fire does not count as being near a campfire")
+	}
+	if !slices.Contains(f.r.campfires(), at(c.FireX, c.FireY)) {
+		t.Fatal("night creatures do not see the village fire")
+	}
+	f.place(float64(c.FireX)+2, float64(c.FireY), 1)
+	if f.r.nearStruct(f.p, "campfire", 4) {
+		t.Fatal("a village fire warms a keeper in the mine below it")
+	}
+}
+
+// An entrance from a save that predates entrance torches gets one on load.
+func TestOldEntrancesGetTheirTorch(t *testing.T) {
+	f := newFixture(t)
+	x, y := mineSite(t, f)
+	f.r.openShaft(x, y)
+	f.r.structures[at(x, y)] = &Structure{Kind: "mineshaft", HP: 25, Lvl: 1}
+	f.r.lightShafts()
+	if !f.r.torches[at(x, y-1)] {
+		t.Fatal("an old entrance was left dark")
+	}
+}
+

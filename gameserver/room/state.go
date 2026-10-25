@@ -170,6 +170,9 @@ func (rm *Room) nearStruct(p *Player, kind string, radius float64) bool {
 	if p.Z != 0 {
 		return false
 	}
+	if kind == "campfire" && rm.villageFireNear(p.X, p.Y, radius) {
+		return true
+	}
 	for i, s := range rm.structures {
 		if s.Kind != kind {
 			continue

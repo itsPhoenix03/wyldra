@@ -189,6 +189,7 @@ for (const isle of ['woods', 'dunes', 'spire', 'marsh', 'core'])
 _manifest.push(
   ['lantern',        '/sprites/lantern.svg',        24, 52],   // WIRED: lantern decor item
   ['ladder',         '/sprites/ladder.svg',         26, 56],   // WIRED: mine exit marker
+  ['hand_lantern',   '/sprites/hand_lantern.svg',   40, 64],   // WIRED: keeper's mine lantern (rig.ts), baked at 4x, drawn at .14
   ['drowned',        '/sprites/drowned.svg',        42, 38],   // WIRED: amphibious enemy
   ['blight_lancer',  '/sprites/blight_lancer.svg',  52, 72],   // WIRED: slow siege beam-caster
   ['lava',           '/tiles/lava.svg',             64, 40],

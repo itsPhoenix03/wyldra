@@ -3,6 +3,7 @@ package room
 import (
 	"math"
 	"math/rand"
+	"slices"
 
 	"hearth/gameserver/world"
 )
@@ -224,7 +225,7 @@ func (r *Room) fearsFire(c *Creature, typ string) bool {
 	return (typ == "crawler" || typ == "husk_wolf") && c.Enraged == 0 && r.isNight() && len(r.campfires()) > 0
 }
 
-// campfires lists campfire tiles, cached for the tick.
+// campfires lists campfire tiles, built and village alike, cached for the tick.
 func (r *Room) campfires() []int {
 	if r.fireIdxTick == r.tickN && r.fireIdx != nil {
 		return r.fireIdx
@@ -233,6 +234,13 @@ func (r *Room) campfires() []int {
 	for _, i := range r.structIndices() {
 		if s, ok := r.structures[i]; ok && s.Kind == "campfire" {
 			out = append(out, i)
+		}
+	}
+	built := len(out)
+	for _, c := range r.camps {
+		// a village's huts share one fire: list it once
+		if fi := c.FireY*world.SIZE + c.FireX; !slices.Contains(out[built:], fi) {
+			out = append(out, fi)
 		}
 	}
 	if out == nil {

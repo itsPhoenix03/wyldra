@@ -340,6 +340,7 @@ func New(cfg Config) (*Room, error) {
 	r.applyTerrainFeatures(false) // with no save to read flags from (loadSave stamps otherwise)
 	r.setupCamps()
 	r.clearBuiltOverNodes()
+	r.lightShafts()
 	return r, nil
 }
 

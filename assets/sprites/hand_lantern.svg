@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="16" viewBox="0 0 10 16">
+<defs>
+<radialGradient id="g" cx="5" cy="9" r="3.4" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#fff4c2"/>
+<stop offset=".45" stop-color="#ffd06a"/>
+<stop offset="1" stop-color="#d9822c"/>
+</radialGradient>
+<linearGradient id="b" x1="0" y1="0" x2="1" y2="0">
+<stop offset="0" stop-color="#5e4526"/>
+<stop offset=".35" stop-color="#b8894a"/>
+<stop offset=".6" stop-color="#8a6434"/>
+<stop offset="1" stop-color="#4a3620"/>
+</linearGradient>
+</defs>
+<path d="M1.5 6.4V2.9Q1.5.7 5 .7T8.5 2.9V6.4" fill="none" stroke="#221d19" stroke-width=".55" stroke-linecap="round"/>
+<circle cx="5" cy=".75" r=".45" fill="none" stroke="#221d19" stroke-width=".35"/>
+<path d="M1.2 6.2V13.2M8.8 6.2V13.2" stroke="#2c2621" stroke-width=".75" stroke-linecap="round"/>
+<path d="M1.2 6.2V13.2M8.8 6.2V13.2" stroke="#5a4e44" stroke-width=".25" stroke-linecap="round" transform="translate(-.15 0)"/>
+<path d="M4.2 2.5H5.8V3.5H4.2Z" fill="#2e2823" stroke="#1c1815" stroke-width=".3"/>
+<path d="M2.1 5.4Q2.4 3.4 5 3.3Q7.6 3.4 7.9 5.4Z" fill="#3b342e" stroke="#1c1815" stroke-width=".4" stroke-linejoin="round"/>
+<path d="M3.3 4.6H6.7" stroke="#16130f" stroke-width=".45" stroke-dasharray=".45 .45"/>
+<path d="M3.1 4Q5 3.5 6.9 4" fill="none" stroke="#6b5d50" stroke-width=".25"/>
+<path d="M1.9 5.4H8.1V6.2H1.9Z" fill="#2c2621" stroke="#1c1815" stroke-width=".3"/>
+<path d="M3.2 6.2C1.6 7.4 1.6 10.6 3.2 11.8H6.8C8.4 10.6 8.4 7.4 6.8 6.2Z" fill="url(#g)" stroke="#6e4a22" stroke-width=".3"/>
+<path d="M5 7.4Q6.1 8.8 5.6 10Q5 10.6 4.4 10Q3.9 8.8 5 7.4Z" fill="#fffbe6"/>
+<path d="M5 8.4Q5.5 9.2 5.25 9.8Q5 10.1 4.75 9.8Q4.5 9.2 5 8.4Z" fill="#9fd4ff" opacity=".55"/>
+<path d="M4.4 10.4H5.6V11H4.4Z" fill="#3a2f25"/>
+<path d="M2.9 6.9Q2.3 9 2.9 11.1" fill="none" stroke="#ffffff" stroke-width=".35" opacity=".55" stroke-linecap="round"/>
+<path d="M3.9 6.2Q3.3 9 3.9 11.8M6.1 6.2Q6.7 9 6.1 11.8M2.05 9H7.95" fill="none" stroke="#2c2621" stroke-width=".3" opacity=".9"/>
+<path d="M1.6 11.8H8.4V12.4H1.6Z" fill="#2c2621"/>
+<path d="M1.5 12.4H8.5Q8.9 14.6 7.6 14.9H2.4Q1.1 14.6 1.5 12.4Z" fill="url(#b)" stroke="#2a2016" stroke-width=".4" stroke-linejoin="round"/>
+<path d="M2 13.3H8" stroke="#d6aa63" stroke-width=".3" opacity=".8"/>
+</svg>

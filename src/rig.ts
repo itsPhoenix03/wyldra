@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { HUMAN_CLIPS, humanFrame } from './assets.ts';
 import { SHIRT_HEX, ensureSkin, skinId, skinKey, type Cloak } from './keeperSkins.ts';
 import { pickView, type View } from './facing.ts';
+import { LANTERN_BELT, LANTERN_HAND } from './lanternAnchors.ts';
 
 /* ────────────────────────────────────────────────────────────────────────────
  * POSE MODEL — read this before touching anything below.
@@ -44,6 +45,13 @@ import { pickView, type View } from './facing.ts';
  *   keeper / keeper_back / keeper_side. The current view picks the set; actions
  *   aimed at something (main.ts faceDir) turn the keeper toward it first.
  *   Side art faces right and is flipped for left; the back view is never flipped.
+ *
+ * MINE LANTERN (setLantern)
+ *   An overlay Image in bodyRoot, in front of spr, hung from its bail. Where it
+ *   hangs is baked per frame (tools/art/lantern-anchors.mjs → lanternAnchors.ts):
+ *   in the free hand on the base and walk frames, hooked on the belt at the hip
+ *   in every other clip so both hands are free. Its swing is a damped spring on
+ *   one angle (lanA/lanV), advanced in tick like every other timer.
  * ──────────────────────────────────────────────────────────────────────────── */
 
 /** Kept for the create() call site; the keeper is SVG art now, nothing to generate. */
@@ -125,6 +133,12 @@ const JUMPS: Record<string, JumpShape> = {
   leap: { at: [0, .08, .22, .4, .58, .78, .9], up: .06, down: .8, height: 15 },
 };
 const HURT_DUR = 0.22, FLASH_DUR = 0.09;
+// Mine lantern: hand_lantern.svg is a 10×16 viewBox baked at 40×64 and drawn at 5.6×9 px,
+// hung from its bail (y 2.8 of 16); the glass centre is LAN_GLASS px below that.
+const LAN_SCALE = 0.14, LAN_OY = 2.8 / 16, LAN_GLASS = 3.5;
+const LAN_K = 140, LAN_C = 7, LAN_MAX = 0.6;    // swing spring (≈1.9 Hz, lightly damped), clamp
+const SIDE_HAND_REST = 1.6;                      // mean x of the side walk's near hand (lanternAnchors)
+const WALK_CYCLE = LOOP_SPF.walk * 8;            // seconds per walk loop (8 frames)
 const TAU = Math.PI * 2;
 
 const easeOutSine = (t: number) => Math.sin(t * Math.PI * 0.5);
@@ -162,6 +176,14 @@ export class Rig extends Phaser.GameObjects.Container {
   private armor = false;
   private skin = '0';           // active skin id once its textures exist
   private actAnim = '';
+
+  // ── mine lantern (setLantern) ──
+  private lantern: Phaser.GameObjects.Image | null = null;
+  private lanOn = false;
+  private lanBelt = false;
+  private lanA = 0; private lanV = 0;   // swing angle (rad, + = clockwise) and its rate
+  /** The lantern glass's offset from the rig's x/y in world px (flip applied); main.ts centres the light on it. */
+  lanX = 0; lanY = 0;
 
   // ── action state (single mutable record; no per-frame allocation) ──
   private actOn = false;
@@ -255,6 +277,18 @@ export class Rig extends Phaser.GameObjects.Container {
   /** Starmetal Armor breastplate, worn under any cloak. */
   setArmor(on: boolean | undefined) { this.armor = !!on; }
 
+  /** Mine lantern: carried underground, in the free hand or hooked on the belt during actions. */
+  setLantern(on: boolean) {
+    on = !!on;
+    if (on === this.lanOn) return;
+    this.lanOn = on;
+    if (on && !this.lantern) {
+      this.lantern = this.scene.add.image(0, 0, 'hand_lantern').setOrigin(0.5, LAN_OY).setScale(LAN_SCALE);
+      this.bodyRoot.add(this.lantern);   // last child: in front of the frame
+    }
+    this.lanA = this.lanV = 0;
+  }
+
   // ── actions ──────────────────────────────────────────────────────────────
   /** Legacy entry point. kind==null means an explicitly empty hand (guide §2). */
   act(kind: string | null) {
@@ -320,6 +354,7 @@ export class Rig extends Phaser.GameObjects.Container {
     this.hurtT = 0; this.hurting = false;
     this.flashT = 0; if (this.flashOn) this.setFlash(false);
     this.walkW = 0; this.phase = 0; this.idlePhase = 0; this.loopT = 0;
+    this.lanA = this.lanV = 0;
     this.tick(0);
   }
 
@@ -431,6 +466,7 @@ export class Rig extends Phaser.GameObjects.Container {
     // 3. apply exactly once.
     // in water, any frame but the swim loop's own gets the underwater split
     const wet = this.swim && !tex.includes('_swim_');
+    const frame = tex;                       // un-skinned name: the lantern anchors' key
     tex = skinKey(tex, this.skin);
     if (tex !== this.tex || wet !== this.wet) {
       if (tex !== this.tex) this.spr.setTexture(tex);
@@ -464,5 +500,35 @@ export class Rig extends Phaser.GameObjects.Container {
     this.bodyRoot.x = bx; this.bodyRoot.y = by; this.bodyRoot.rotation = brot;
     this.spr.scaleY = sy;
     if (this.wet) this.sprLow.scaleY = sy;
+
+    // ── mine lantern: free hand on the base/walk frames, belt hook in every other clip ──
+    const lan = this.lantern;
+    if (lan) {
+      const hand = this.lanOn && !this.actOn ? LANTERN_HAND[frame] : undefined;
+      const at = this.lanOn && !this.swim && !this.seated ? (hand ?? LANTERN_BELT[frame]) : undefined;
+      if (at) {
+        const belt = !hand;
+        if (belt !== this.lanBelt) { this.lanBelt = belt; this.lanV += belt ? 2.5 : -2.5; }   // the hand-off jostles it
+        // swing target (image space, + = bottom swings toward -x): impact pushes and hurt
+        // recoil jolt it; walking sways it (front/back) or it trails the arm swing (side)
+        let tgt = -0.08 * bx;
+        if (!belt) {
+          if (this.view === 'side') tgt += this.walkW * -0.05 * (at[0] - SIDE_HAND_REST) + 0.3 * ((this.moving ? 1 : 0) - this.walkW);
+          else tgt += 0.12 * this.walkW * Math.sin((this.loopT / WALK_CYCLE) * TAU);
+        }
+        this.lanV += (LAN_K * (tgt - this.lanA) - LAN_C * this.lanV) * dt;
+        this.lanA += this.lanV * dt;
+        if (this.lanA > LAN_MAX) { this.lanA = LAN_MAX; this.lanV = 0; }
+        else if (this.lanA < -LAN_MAX) { this.lanA = -LAN_MAX; this.lanV = 0; }
+        lan.x = at[0]; lan.y = at[1];
+        lan.rotation = this.lanA - brot;     // hangs plumb whatever the body's tilt
+        if (!lan.visible) lan.setVisible(true);
+        this.lanX = fx * (bx + at[0] - Math.sin(this.lanA) * LAN_GLASS);
+        this.lanY = by + at[1] + Math.cos(this.lanA) * LAN_GLASS;
+      } else {
+        if (lan.visible) lan.setVisible(false);
+        this.lanX = this.lanY = 0;
+      }
+    }
   }
 }

@@ -379,6 +379,7 @@ class Hearth extends Phaser.Scene {
   bergSpr = new Map<number, Phaser.GameObjects.Image>();
   torchSpr = new Map<number, Phaser.GameObjects.Image>();
   darkRT!: Phaser.GameObjects.RenderTexture;
+  lanternHole!: Phaser.GameObjects.Image; // off-list 'glow-s' stamp erased from darkRT at each mine lantern
   notes: { x: number; y: number; text: string }[] = [];
   furnSpr = new Map<number, Phaser.GameObjects.Image>();
   exitSpr = new Map<number, Phaser.GameObjects.Image>();
@@ -951,6 +952,7 @@ class Hearth extends Phaser.Scene {
       .setOrigin(0)
       .setDepth(999993)
       .setVisible(false);
+    this.lanternHole = this.make.image({ key: "glow-s", add: false });
   }
 
   makeWeatherFx() {
@@ -4066,6 +4068,7 @@ class Hearth extends Phaser.Scene {
         this.py = Math.max(0, Math.min(SIZE - 1, ny));
     }
     if (isHeld("interact")) this.interact();
+    this.me.setLantern(this.z === 1); // the mine lantern (rig.ts); a no-op unless the layer changed
     this.me.tick(dt);
     // jump window (the visible hop is the rig's jump clip, same 0.45s)
     if (this.jumpT >= 0) {
@@ -4188,6 +4191,7 @@ class Hearth extends Phaser.Scene {
         o.z === 0 && o.b === 0 && this.tileAt(o.wx, o.wy) === T.WATER,
       );
       o.rig.setBoat(o.z === 0 ? o.b : 0);   // server-driven boat state; the rig draws the hull
+      o.rig.setLantern(o.z === 1);          // underground they carry the mine lantern too
       if (o.z === 0 && o.b > 0 && d > 0.5) {
         o.wakeT -= dt;
         if (o.wakeT <= 0) {
@@ -4349,7 +4353,22 @@ class Hearth extends Phaser.Scene {
       const toSy = (wy: number) => wy - wv.y;
       const psx = toSx(p.x),
         psy = toSy(p.y);
-      this.darkRT.erase("glow-s", psx - 110, psy - 110);
+      // the keeper's light pool comes from the lantern they carry (rig.lanX/lanY: 0,0
+      // when it isn't shown), breathing with a flame flicker off the shared clock
+      const fl =
+        Math.sin(this.flickerT * 7.3) * 0.6 +
+        Math.sin(this.flickerT * 13.1 + 1.7) * 0.4;
+      const hole = this.lanternHole.setScale(1 + fl * 0.035);
+      this.darkRT.erase(hole, psx + this.me.lanX, psy + this.me.lanY);
+      // other keepers down here carry one as well: a smaller pool each
+      hole.setScale(0.62 + fl * 0.02);
+      for (const o of this.others.values()) {
+        if (o.z !== 1) continue;
+        const sx = toSx(o.rig.x + o.rig.lanX),
+          sy = toSy(o.rig.y + o.rig.lanY);
+        if (sx > -80 && sy > -80 && sx < rtW + 80 && sy < rtH + 80)
+          this.darkRT.erase(hole, sx, sy);
+      }
       for (const [, s] of this.torchSpr) {
         const sx = toSx(s.x),
           sy = toSy(s.y);
@@ -4488,6 +4507,8 @@ class Hearth extends Phaser.Scene {
   nearKind(kind: string, r = 4) {
     // stations stand on the surface: in a mine or a shelter the craft menu must not offer them
     if (this.z !== 0) return false;
+    // a village fire cooks like a built one (the server's nearStruct agrees)
+    if (kind === "campfire" && this.folk.fireNear(this.px, this.py, r)) return true;
     for (const [i, s] of this.structSpr)
       if (
         s.kind === kind &&

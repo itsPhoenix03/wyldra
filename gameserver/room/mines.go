@@ -148,3 +148,49 @@ func (r *Room) openShaft(x, y int) (opened []int, mines int) {
 	sort.Ints(opened)
 	return opened, mines
 }
+
+// shaftTorchOrder is where a new entrance's torch goes, first carved tile wins:
+// the tiles behind the ladder on screen first, so the torch never hides it.
+var shaftTorchOrder = [8][2]int{{0, -1}, {-1, 0}, {-1, -1}, {1, 0}, {0, 1}, {1, -1}, {-1, 1}, {1, 1}}
+
+// lightShaft sets a torch beside the ladder of a new entrance at (x, y), so the
+// light down there has a source. A mine that is already lit around the shaft
+// gets none. It returns the torch's tile, or -1.
+func (r *Room) lightShaft(x, y int) int {
+	at := func(dx, dy int) (int, bool) {
+		nx, ny := x+dx, y+dy
+		if nx < 0 || ny < 0 || nx >= world.SIZE || ny >= world.SIZE {
+			return 0, false
+		}
+		return ny*world.SIZE + nx, true
+	}
+	for dy := -1; dy <= 1; dy++ {
+		for dx := -1; dx <= 1; dx++ {
+			if t, ok := at(dx, dy); ok && r.torches[t] {
+				return -1
+			}
+		}
+	}
+	spot := y*world.SIZE + x // the shaft itself if nothing beside it is carved
+	for _, d := range shaftTorchOrder {
+		if t, ok := at(d[0], d[1]); ok && r.digs[t] {
+			spot = t
+			break
+		}
+	}
+	if !r.digs[spot] {
+		return -1
+	}
+	r.torches[spot] = true
+	return spot
+}
+
+// lightShafts gives every standing entrance its torch: entrances built before
+// they came with one, or whose torch spot was dug out later, get it on load.
+func (r *Room) lightShafts() {
+	for i, s := range r.structures {
+		if s.Kind == "mineshaft" {
+			r.lightShaft(i%world.SIZE, i/world.SIZE)
+		}
+	}
+}
