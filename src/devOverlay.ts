@@ -63,10 +63,11 @@ export class DevOverlay {
       m = document.createElement('div');
       m.id = 'devMeter';
       m.style.cssText =
-        'position:fixed;bottom:8px;left:8px;z-index:31;display:none;pointer-events:none;' +
+        'display:none;pointer-events:none;' +
         'background:rgba(10,15,20,.82);border:1px solid #57a;border-radius:6px;padding:4px 8px;' +
         'color:#cfe;font:11px/1.45 monospace;white-space:pre';
-      document.body.appendChild(m);
+      // docked in the HUD's bottom band (index.html #uiMeter), so it never sits under the quickbar
+      (document.getElementById('uiMeter') ?? document.body).appendChild(m);
     }
     this.meter = m;
   }

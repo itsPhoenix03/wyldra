@@ -530,7 +530,7 @@ class Hearth extends Phaser.Scene {
     const uiApi = getUiApi();
     this.updateUI = uiApi;
     this.uiApi = uiApi;
-    showMsg("Connecting to The Hearth...");
+    showMsg("Connecting to The Hearth...", 3500, "status");
 
     // Red vignette flash for player damage — create once, reuse (Guide §2.4)
     this.vignetteRect = this.add
@@ -645,10 +645,11 @@ class Hearth extends Phaser.Scene {
     const d = document.createElement("div");
     d.id = "devPanel";
     d.style.cssText =
-      "position:fixed;top:8px;right:8px;z-index:30;display:none;background:rgba(10,15,20,.95);" +
+      "display:none;pointer-events:auto;background:rgba(10,15,20,.95);" +
       "border:1px solid #b96;border-radius:8px;padding:10px 12px;color:#fff;font:12px monospace;max-width:220px;" +
-      // fit the screen and scroll inside: the panel outgrew short viewports (zoomed by --uiz, so divide it out)
-      "box-sizing:border-box;max-height:calc((100vh - 16px) / var(--uiz, 1));overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#57a transparent;";
+      // docked in the HUD layout (index.html #uiDev: under the vitals, above the bottom band);
+      // it scrolls inside when the room there is shorter than the panel
+      "box-sizing:border-box;max-height:100%;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#57a transparent;";
     d.innerHTML =
       `<b style="color:#ffb96a">🛠 DEV TESTER</b> <span style="color:#889">(F10)</span><br>` +
       // Shown instead of the controls when this session has no dev claim, so the panel
@@ -730,7 +731,7 @@ class Hearth extends Phaser.Scene {
       `margin:2px;padding:3px 7px;cursor:pointer;font:12px monospace}#devPanel button:hover{background:#3a5a4a}` +
       `#devSpawnSel,#devSpawnLvl,#devAiSel{background:#1a222c;color:#fff;border:1px solid #57a;border-radius:4px;` +
       `font:12px monospace;padding:3px}#devSpawnSel,#devAiSel{flex:1;min-width:0}</style>`;
-    document.body.appendChild(d);
+    (document.getElementById("uiDev") ?? document.body).appendChild(d);
     const ranges = document.getElementById("devRanges") as HTMLInputElement;
     ranges.checked = this.dev.rangesOn;
     ranges.addEventListener("change", () => this.dev.setRanges(ranges.checked));
@@ -851,6 +852,7 @@ class Hearth extends Phaser.Scene {
           ? "Disconnected. Is the server running? (npm run server)"
           : "Disconnected from the world server. (cd gameserver && go run ./cmd/hearthd)",
         60000,
+        "danger",
       );
     };
   }
@@ -1462,7 +1464,7 @@ class Hearth extends Phaser.Scene {
     this.audio.start(); // audio unlocks on first gesture
     if (e.code === "F9") {
       if (this.devEnabled) this.send({ t: "dev" });
-      else showMsg(DEV_OFF_MSG, 5000);
+      else showMsg(DEV_OFF_MSG, 5000, "hint");
       return true;
     }
     if (e.code === "F10") {
@@ -1501,7 +1503,7 @@ class Hearth extends Phaser.Scene {
           this.me.playAction({ name: "torch", tool: null });   // kneel and plant it
           this.send({ t: "torch" });
         }
-        else if (this.z === 1) showMsg("Craft torches first (2 wood + 1 fiber).");
+        else if (this.z === 1) showMsg("Craft torches first (2 wood + 1 fiber).", 3500, "hint");
         return;
       case "hotbar1": case "hotbar2": case "hotbar3": case "hotbar4": case "hotbar5":
         return this.setEquip(HOTBAR[+a.slice(-1) - 1]);
@@ -1509,16 +1511,16 @@ class Hearth extends Phaser.Scene {
       case "eat": return this.eat();
       case "medicine":
         if (this.inv.medicine > 0) this.send({ t: "use", k: "medicine" });
-        else showMsg("No medicine — craft Herbal Medicine at a campfire (4 fiber + 1 water).", 2500);
+        else showMsg("No medicine — craft Herbal Medicine at a campfire (4 fiber + 1 water).", 2500, "hint");
         return;
       case "cloak": return this.cycleCloak();
       case "armor":
         if (this.gear.has("starmetal_armor")) this.setWear("starmetal_armor");
-        else showMsg("You have no Starmetal armor yet.", 2000);
+        else showMsg("You have no Starmetal armor yet.", 2000, "hint");
         return;
       case "boat": return this.cycleBoat();
       case "mute":
-        showMsg(this.audio.toggleMute() ? "🔇 Muted" : "🔊 Sound on", 1000);
+        showMsg(this.audio.toggleMute() ? "🔇 Muted" : "🔊 Sound on", 1000, "info");
         return;
     }
   }
@@ -1526,30 +1528,30 @@ class Hearth extends Phaser.Scene {
   // The item keys are pickier than a click on the slot: they will not waste a drink or a
   // meal on a full stomach (the server tops the bar at 10 and keeps the item).
   drink() {
-    if (!(this.inv.water > 0)) showMsg(`No water — collect some at a shore (${keyLabel("interact")}).`, 2000);
-    else if (this.thirst >= 10) showMsg("You are not thirsty.", 1500);
+    if (!(this.inv.water > 0)) showMsg(`No water — collect some at a shore (${keyLabel("interact")}).`, 2000, "hint");
+    else if (this.thirst >= 10) showMsg("You are not thirsty.", 1500, "hint");
     else this.send({ t: "use", k: "water" });
   }
 
   eat() {
     // most filling first: cooked meat +5, bread +4, glowcap +2 (and 1 HP)
     const k = ["cookedmeat", "bread", "glowcap"].find((f) => this.inv[f] > 0);
-    if (!k) showMsg("Nothing to eat — hunt, then cook the meat at a campfire.", 2000);
-    else if (this.hunger >= 10) showMsg("You are not hungry.", 1500);
+    if (!k) showMsg("Nothing to eat — hunt, then cook the meat at a campfire.", 2000, "hint");
+    else if (this.hunger >= 10) showMsg("You are not hungry.", 1500, "hint");
     else this.send({ t: "use", k });
   }
 
   /** Next owned cloak, then none: heat → fur → bare. */
   cycleCloak() {
     const owned = ["heatcloak", "furcloak"].filter((k) => this.gear.has(k));
-    if (!owned.length) return showMsg("You have no cloak yet — craft a Heat or Fur Cloak.", 2000);
+    if (!owned.length) return showMsg("You have no cloak yet — craft a Heat or Fur Cloak.", 2000, "hint");
     this.setWear(owned[owned.indexOf(this.wornGear ?? "") + 1] ?? null);
   }
 
   /** Ready the next owned boat, then none. */
   cycleBoat() {
     const owned = (["boat", "sboat"] as const).filter((k) => this.inv[k] > 0);
-    if (!owned.length) return showMsg("You have no boat yet — craft one first.", 2000);
+    if (!owned.length) return showMsg("You have no boat yet — craft one first.", 2000, "hint");
     const next = owned[owned.indexOf(this.selectedVehicle as "boat") + 1];
     this.selectVehicle(next ?? this.selectedVehicle!);
   }
@@ -1557,7 +1559,7 @@ class Hearth extends Phaser.Scene {
   /** Toggle the boat to sail in; boats launch from shore, so never from the water. */
   selectVehicle(k: "boat" | "sboat") {
     if (this.swimming || this.sailing) {
-      showMsg("You cannot ready a boat in the water — reach land first!", 2500);
+      showMsg("You cannot ready a boat in the water — reach land first!", 2500, "hint");
       return;
     }
     this.selectedVehicle = this.selectedVehicle === k ? null : k;
@@ -1835,7 +1837,7 @@ class Hearth extends Phaser.Scene {
   /** The place key: put the selected piece on the tile in front of the keeper. */
   placeAhead() {
     if (!this.placing && !this.placingMod) {
-      showMsg(`Nothing to place — choose a 🔨 item in the Bag (${keyLabel("inventory")}) or a piece in Building (${keyLabel("build")}).`, 2500);
+      showMsg(`Nothing to place — choose a 🔨 item in the Bag (${keyLabel("inventory")}) or a piece in Building (${keyLabel("build")}).`, 2500, "hint");
       return;
     }
     const { x, y } = this.placeTarget();
@@ -1846,7 +1848,7 @@ class Hearth extends Phaser.Scene {
     if (this.ready && this.placingMod) {
       if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) return;
       if (this.z !== 0) {
-        showMsg("Modular building only works outdoors.");
+        showMsg("Modular building only works outdoors.", 3500, "hint");
         return;
       }
       this.send({
@@ -1865,7 +1867,7 @@ class Hearth extends Phaser.Scene {
     if (this.z !== 0) {
       // interiors accept ONLY furniture — never fall through to a surface build
       if (FURNITURE.has(this.placing)) this.send({ t: "furn", i: y * SIZE + x, kind: this.placing });
-      else { showMsg("That can only be placed outside."); this.setPlacing(null); }
+      else { showMsg("That can only be placed outside.", 3500, "hint"); this.setPlacing(null); }
     } else
       this.send({
         t: "build",
@@ -1980,7 +1982,7 @@ class Hearth extends Phaser.Scene {
       }
       this.ready = true;
       showMsg(
-        `You are a Keeper. Follow the objective tracker (top right). Press ${keyLabel("craft")} to craft, ${keyLabel("controls")} for the controls.`,
+        `You are a Keeper. Press ${keyLabel("craft")} to craft, ${keyLabel("help")} for how to play, ${keyLabel("controls")} for the controls.`,
         6000,
       );
     } else if (m.t === "chunk") {
@@ -2016,10 +2018,11 @@ class Hearth extends Phaser.Scene {
       this.addOther(m.id, m.x, m.y, m.name);
       this.others.get(m.id)?.rig.setCloak(m.worn);
       this.others.get(m.id)?.rig.setArmor(m.armor);
-      showMsg("A fellow Keeper has joined.");
+      showMsg(`${m.name || "A fellow Keeper"} has joined the world.`, 3500, "player");
     } else if (m.t === "pl") {
       const o = this.others.get(m.id);
       if (o) {
+        showMsg(`${o.label.text} has left the world.`, 3500, "player");
         o.label.destroy();
         o.rig.destroy();
       }
@@ -2084,7 +2087,7 @@ class Hearth extends Phaser.Scene {
       this.wornGear = m.wornGear ?? null;
       this.armorOn = m.armor === true;
     } else if (m.t === "msg") {
-      showMsg(m.s);
+      showMsg(m.s, 3500, /fell hard/i.test(m.s) ? "danger" : "info");
       if (/fell hard/i.test(m.s)) this.voice.fell();
     }
     else if (m.t === "medicOffer") {
@@ -2108,8 +2111,9 @@ class Hearth extends Phaser.Scene {
         showMsg(
           `💊 Healed to full — paid ${m.paid.amount} ${NAMES[m.paid.resource] || m.paid.resource}.`,
           3000,
+          "good",
         );
-      else showMsg(MEDIC_REASON_MSG[m.reason] || "The medic declines.", 3000);
+      else showMsg(MEDIC_REASON_MSG[m.reason] || "The medic declines.", 3000, "hint");
     } else if (m.t === "node") {
       // impact audio on server confirmation, not on keypress — and only for our own hit
       if (m.by === this.id && m.seq === this.pendingActSeq && m.hp !== -1)
@@ -2142,7 +2146,7 @@ class Hearth extends Phaser.Scene {
         this.mud.add(i);
         this.setTileMut(i, "mud");
       }
-      showMsg("The soil sours — this sector's ecosystem is collapsing!");
+      showMsg("The soil sours — this sector's ecosystem is collapsing!", 3500, "danger");
     } else if (m.t === "regrow") {
       // the land heals: soured ground turns back to grass (a blighted tile keeps its blight until cured)
       let near = false;
@@ -2153,7 +2157,7 @@ class Hearth extends Phaser.Scene {
       }
       if (near && this.time.now - this.healMsgAt > 90000) {
         this.healMsgAt = this.time.now;
-        showMsg("🌱 The land is healing — grass reclaims the soured soil.", 3000);
+        showMsg("🌱 The land is healing — grass reclaims the soured soil.", 3000, "good");
       }
     } else if (m.t === "dig") {
       if (m.by === this.id && m.seq === this.pendingActSeq) this.audio.chop();
@@ -2182,13 +2186,14 @@ class Hearth extends Phaser.Scene {
           ? "🔥 The scalding sea sets your wooden hull ABLAZE! You plunge into the burning water — swim!"
           : "💥 An iceberg shattered your boat! You plunge into the freezing sea — swim for land!",
         6000,
+        "danger",
       );
     } else if (m.t === "berg") {
       this.bergSpr.get(m.i)?.destroy();
       this.bergSpr.delete(m.i);
       if (m.pid === this.id) {
         this.audio.hitmob();
-        showMsg("Your reinforced hull smashes through the iceberg!");
+        showMsg("Your reinforced hull smashes through the iceberg!", 3500, "good");
       }
     } else if (m.t === "infect") {
       for (const i of m.tiles) this.setTileMut(i, "blight");
@@ -2197,12 +2202,12 @@ class Hearth extends Phaser.Scene {
       for (const i of m.tiles) this.setTileMut(i, this.mud.has(i) ? "mud" : null);
     } else if (m.t === "wx") {
       this.weather = m.kind;
-      if (m.kind === "rain") showMsg("🌧 Rain sweeps across the lowlands.");
+      if (m.kind === "rain") showMsg("🌧 Rain sweeps across the lowlands.", 3500, "weather");
       else if (m.kind === "sandstorm")
-        showMsg("🌪 A SANDSTORM scours the Dunes — shelter beside a wall or a hut!");
+        showMsg("🌪 A SANDSTORM scours the Dunes — shelter beside a wall or a hut!", 5000, "weather");
       else if (m.kind === "snowstorm")
-        showMsg("❄ A BLIZZARD engulfs the Spire — reach a campfire!");
-      else showMsg("The skies clear.");
+        showMsg("❄ A BLIZZARD engulfs the Spire — reach a campfire!", 5000, "weather");
+      else showMsg("☀ The skies clear.", 3500, "weather");
       this.folk.onWeather(m.kind ?? null, zonesNear(this.px, this.py)[0] ?? null);
     } else if (m.t === "build") {
       this.audio.build();
@@ -2236,7 +2241,7 @@ class Hearth extends Phaser.Scene {
       this.removeModule(m.i, m.slot);
     } else if (m.t === "modfail") {
       // advisory only — the authoritative fact is that no `mod` arrived
-      showMsg(MODFAIL_MSG[m.why] || "You cannot build that here.", 2000);
+      showMsg(MODFAIL_MSG[m.why] || "You cannot build that here.", 2000, "hint");
     } else if (m.t === "sd") {
       if (m.i === this.engineI) this.engineHp = m.hp > 0 ? m.hp : null;
       const s = this.structSpr.get(m.i);
@@ -2278,6 +2283,7 @@ class Hearth extends Phaser.Scene {
       showMsg(
         `⚡ Monolith of the ${MONO_NAMES[m.i]} awakened! (${this.mono.filter(Boolean).length}/4)`,
         5000,
+        "good",
       );
     } else if (m.t === "wave") {
       if (!m.secs) {
@@ -2288,13 +2294,14 @@ class Hearth extends Phaser.Scene {
         return;
       }
       this.waveEnd = Date.now() + m.secs * 1000;
-      showMsg("⚔ THE FINAL ASSAULT BEGINS — DEFEND THE WORLD ENGINE!", 8000);
+      showMsg("⚔ THE FINAL ASSAULT BEGINS — DEFEND THE WORLD ENGINE!", 8000, "danger");
     } else if (m.t === "win") {
       this.won = true;
       this.waveEnd = 0;
       showMsg(
         "✨ THE WORLD ENGINE ROARS — THE BLIGHT IS PURGED. VICTORY!",
         600000,
+        "good",
       );
     } else if (m.t === "hp") {
       if (m.blocked && this.me) this.armorClang();
@@ -2348,7 +2355,7 @@ class Hearth extends Phaser.Scene {
         this.px = m.x;
         this.py = m.y;
         if (this.z === 1) this.setZ(0);
-        showMsg("You fell... reborn at your hearth.");
+        showMsg("You fell... reborn at your hearth.", 3500, "danger");
       } else if (m.hp === 10 && this.hp < 10) {
         /* regen */
       } else if (
@@ -3324,7 +3331,7 @@ class Hearth extends Phaser.Scene {
     const shaft = this.nearMineshaft();
     if (shaft >= 0 && now - this.zToggleAt > 900) {
       if (!this.digs.has(shaft)) {
-        showMsg("The shaft is collapsed.");
+        showMsg("The shaft is collapsed.", 3500, "hint");
         return;
       }
       this.zToggleAt = now;
@@ -3349,6 +3356,7 @@ class Hearth extends Phaser.Scene {
           showMsg(
             "Need 2 fiber (wheat) or 1 essence (glowcap) to plant.",
             3000,
+            "hint",
           );
         }
       } else {
@@ -3360,7 +3368,7 @@ class Hearth extends Phaser.Scene {
     // a hidden note?
     for (const n of this.notes)
       if (Math.hypot(n.x - this.px, n.y - this.py) < 1.8) {
-        showMsg(n.text, 15000);
+        showMsg(n.text, 15000, "note");
         return;
       }
     // a medic? bargain for healing — own cooldown since interact() polls every frame E is held
@@ -3423,7 +3431,7 @@ class Hearth extends Phaser.Scene {
         if (this.inv.core > 0) this.send({ t: "usecore", i: idx });
         else
           showMsg(
-            "This Monolith needs a Monolith Core (forge: 8 crystal + 4 essence).",
+            "This Monolith needs a Monolith Core (forge: 8 crystal + 4 essence).", 3500, "hint",
           );
         return;
       }
@@ -4023,7 +4031,7 @@ class Hearth extends Phaser.Scene {
       dy = 0;
       if (t - this.lastLoadMsg > 2000) {
         this.lastLoadMsg = t;
-        showMsg("Streaming the world in…", 2000);
+        showMsg("Streaming the world in…", 2000, "status");
       }
     }
     // decrement slow counter each frame (client-side, not per-tick)
@@ -4117,18 +4125,21 @@ class Hearth extends Phaser.Scene {
             showMsg(
               "❄ The water is freezing — a Fur Cloak slows the damage. Boats are safe.",
               6000,
+              "danger",
             );
             this.warnedWaterTemp = true;
           } else if (wt === 2) {
             showMsg(
               "🔥 Scalding water! The heat is lethal — a Heat Cloak helps, but a boat keeps you safe.",
               6000,
+              "danger",
             );
             this.warnedWaterTemp = true;
           } else {
             showMsg(
               "🌊 Swimming — very slow. Craft a boat for safer, faster crossings.",
               4000,
+              "weather",
             );
           }
         }
@@ -4465,11 +4476,6 @@ class Hearth extends Phaser.Scene {
       nearWorkbench: this.nearKind("workbench"),
       nearForge: this.nearKind("forge"),
       nearCampfire: this.nearKind("campfire"),
-      structCount: (kind) => {
-        let n = 0;
-        for (const s of this.structSpr.values()) if (s.kind === kind) n++;
-        return n;
-      },
       waveSecs: this.waveEnd
         ? Math.max(0, Math.ceil((this.waveEnd - Date.now()) / 1000))
         : 0,
@@ -4508,8 +4514,7 @@ let uiApiSingleton: ReturnType<typeof initUI> | null = null;
 /** In-game DOM that must disappear when the player returns to the menu. */
 const GAME_DOM_IDS = [
   "hud",
-  "objective",
-  "msg",
+  "toasts",
   "quickbar",
   "btns",
   "craftPanel",
@@ -4561,8 +4566,11 @@ function getUiApi(): ReturnType<typeof initUI> {
  */
 export function quitToMenu(opts: { confirm?: boolean; error?: string } = {}) {
   if (!gameStarted) return;
-  if (opts.confirm !== false && !confirm("Leave the world and return to the main menu?"))
+  // asked on the game's own board (index.html #quitModal), which calls back here to leave
+  if (opts.confirm !== false && uiApiSingleton) {
+    uiApiSingleton.confirmQuit(() => quitToMenu({ ...opts, confirm: false }));
     return;
+  }
 
   const sc = activeScene;
 

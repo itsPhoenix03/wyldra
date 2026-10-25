@@ -6,79 +6,253 @@
   <title>Wyldra</title>
   <style>
     body { margin: 0; background: #111; overflow: hidden; font-family: monospace; }
+    /* ================================================================
+       IN-GAME INTERFACE. #gameUi lays the HUD out so no two pieces can overlap,
+       whatever the window size:
+         left column  — vitals, then the dev tester under them
+         right column — notifications at the top, the Build and Craft boards in
+                        the room left below them (sitting at its foot, so a
+                        notification only squeezes a board when space runs out)
+         bottom band  — dev meter (left) · medic offer over the quickbar (centre) · menu buttons (right)
+       The bottom band's side columns always keep their full width and the
+       centre takes what is left (the quickbar wraps instead of sliding under
+       them). The windows that stop play (Bag, Help, Keys, Chest) sit centred
+       above it all. Every board is the title screen's notice board, smaller:
+       dark planks in a timber frame, its name on a plaque across the top edge.
+       ================================================================ */
+    :root {
+      --serif: "Palatino Linotype", Palatino, "Book Antiqua", "URW Palladio L", P052, Georgia, serif;
+      --edge: #1f140c; --brass: #ffd166; --ink: #f1e3c4; --ink-dim: #c2ab86;
+    }
     /* --uiz is set from main.ts: keeps the interface a constant on-screen size while the
        browser page zoom changes (the camera clamps the world view by the same factor). */
-    #hud, #objective, #msg, #quickbar, #btns, #craftPanel, #buildPanel, #chestPanel, #medicPanel, #devPanel, .modal {
-      zoom: var(--uiz, 1);
+    #gameUi, .modal, #chestPanel { zoom: var(--uiz, 1); }
+    #gameUi { position: fixed; inset: 0; z-index: 10; box-sizing: border-box; padding: 8px;
+              display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+              font: 14px/1.45 var(--serif); color: var(--ink); }
+    .ui-band { display: grid; gap: 8px;
+               grid-template-columns: minmax(max-content, 1fr) minmax(0, auto) minmax(max-content, 1fr); }
+    .ui-band > * { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+    .ui-bot { align-items: end; }
+    .ui-l { align-items: flex-start; }
+    .ui-c { align-items: center; }
+    .ui-r { align-items: flex-end; }
+    /* everything above the bottom band: the two columns */
+    .ui-upper { flex: 1; min-height: 0; display: flex; justify-content: space-between; gap: 8px; }
+    .ui-upper > * { min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+    /* the room each column has left once its top item is placed (definite, so the
+       dev tester and the boards can cap themselves at 100% of it and scroll inside) */
+    #uiDev, .ui-boards { flex: 1 1 0; min-height: 0; display: flex; gap: 8px; }
+    #uiDev { align-items: flex-start; }
+    .ui-boards { align-items: flex-end; padding-top: 24px; }   /* room for a board's plaque */
+
+    #hud {
+      padding: 7px 13px; font-size: 15px; line-height: 1.6;
+      background: linear-gradient(180deg, rgba(30,21,14,.8), rgba(14,10,7,.8)); border: 1px solid rgba(0,0,0,.7);
+      border-radius: 8px; box-shadow: inset 0 1px 0 rgba(255,214,160,.13), 0 4px 14px rgba(0,0,0,.4);
+      text-shadow: 0 1px 0 rgba(0,0,0,.7);
     }
-    #hud { position: fixed; top: 8px; left: 8px; color: #fff; background: rgba(0,0,0,.55);
-           padding: 8px 12px; border-radius: 6px; font-size: 14px; line-height: 1.6; pointer-events: none; z-index: 10; }
-    #objective { position: fixed; top: 8px; right: 8px; max-width: 320px; color: #ffd97a; background: rgba(0,0,0,.55);
-           padding: 8px 12px; border-radius: 6px; font-size: 13px; line-height: 1.4; pointer-events: none; z-index: 10; }
-    #msg { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); color: #ffd97a;
-           background: rgba(0,0,0,.65); padding: 6px 14px; border-radius: 6px; font-size: 15px;
-           z-index: 11; display: none; max-width: 60vw; text-align: center; }
-    .modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 14;
-             background: rgba(10,15,20,.95); border: 1px solid #57a; border-radius: 10px;
-             padding: 18px 22px; max-width: 640px; max-height: calc(75vh / var(--uiz, 1)); overflow-y: auto;
-             color: #fff; font-size: 14px; display: none; box-shadow: 0 8px 40px rgba(0,0,0,.6); }
-    .modal h3 { margin: 0 0 10px; color: #ffd97a; }
-    .modal .hint { color: #889; font-size: 12px; }
-    #inv { display: flex; gap: 6px; flex-wrap: wrap; max-width: 600px; }
-    #quickbar { position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%); z-index: 10;
-                display: flex; gap: 6px; }
-    kbd { background: #2a3a4a; border: 1px solid #57a; border-radius: 4px; padding: 1px 7px;
-          font-family: monospace; font-size: 12px; }
-    #helpModal td { border: none; padding: 3px 12px 3px 0; vertical-align: top; }
-    .slot { color: #fff; background: rgba(0,0,0,.6); padding: 5px 9px; border-radius: 6px; font-size: 13px;
-            border: 1px solid #333; white-space: nowrap; }
-    .slot.place { cursor: pointer; border-color: #6a5; }
-    .slot.place:hover { background: rgba(40,60,40,.8); }
-    .slot.sel { border-color: #ffd97a; background: rgba(80,70,20,.8); }
-    .slot.tool { border-color: #57a; cursor: pointer; }
-    .slot.tool.eq { border-color: #ffd97a; background: rgba(80,70,20,.85); box-shadow: 0 0 6px rgba(255,217,122,.4); }
-    .slot.use { cursor: pointer; border-color: #4aa; }
-    .slot.use:hover { background: rgba(30,60,60,.85); }
-    #btns { position: fixed; bottom: 8px; right: 8px; z-index: 10; display: flex; gap: 6px; }
-    #btns button { background: #2a3a4a; color: #fff; border: 1px solid #57a; border-radius: 6px;
-                   padding: 8px 14px; font-family: monospace; font-size: 14px; cursor: pointer; }
-    #quitBtn { border-color: #a5626a; color: #f0c2c2; }
-    #quitBtn:hover { background: #3a2a30; }
-    #craftPanel { position: fixed; bottom: 52px; right: 8px; width: 300px; max-height: calc(60vh / var(--uiz, 1)); overflow-y: auto;
-                  background: rgba(10,15,20,.92); color: #fff; border: 1px solid #57a; border-radius: 8px;
-                  padding: 12px; font-size: 13px; z-index: 12; display: none; }
-    #buildPanel { position: fixed; bottom: 52px; right: 316px; width: 300px; max-height: calc(60vh / var(--uiz, 1)); overflow-y: auto;
-                  background: rgba(10,15,20,.92); color: #fff; border: 1px solid #57a; border-radius: 8px;
-                  padding: 12px; font-size: 13px; z-index: 12; display: none; }
-    #buildPanel .slotgroup { color: #8ab; margin: 8px 0 2px; font-size: 11px; text-transform: uppercase; }
-    .recipe button.sel { border-color: #8f8; background: #24402a; }
-    .recipe { margin: 6px 0; display: flex; align-items: center; gap: 8px; }
-    .recipe button { background: #2a3a4a; color: #fff; border: 1px solid #57a; border-radius: 4px;
-                     padding: 4px 8px; font-family: monospace; cursor: pointer; min-width: 120px; text-align: left; }
-    .recipe button:disabled { opacity: 0.4; cursor: default; }
-    .cost { color: #aaa; } .need { color: #d66; font-size: 11px; }
-    #help { position: fixed; bottom: 8px; left: 8px; color: #aaa; background: rgba(0,0,0,.45);
-            padding: 6px 10px; border-radius: 6px; font-size: 12px; z-index: 10; max-width: 260px; }
-    #chestPanel { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); z-index: 14;
-                  background: rgba(10,15,20,.95); border: 1px solid #57a; border-radius: 10px;
-                  padding: 18px 22px; min-width: 360px; max-height: calc(75vh / var(--uiz, 1)); overflow-y: auto;
-                  color: #fff; font-size: 13px; display: none; box-shadow: 0 8px 40px rgba(0,0,0,.6); }
-    #chestPanel table { width: 100%; border-collapse: collapse; }
-    #chestPanel td, #chestPanel th { padding: 3px 6px; }
-    #chestPanel button { background: #2a3a4a; color: #fff; border: 1px solid #57a; border-radius: 4px;
-                         cursor: pointer; font-family: monospace; }
-    #chestPanel button:disabled { opacity: 0.35; cursor: default; }
-    #medicPanel { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); z-index: 14;
-                  background: rgba(10,15,20,.95); border: 1px solid #57a; border-radius: 10px;
-                  padding: 16px 20px; min-width: 260px; color: #fff; font-size: 14px; display: none;
-                  box-shadow: 0 8px 40px rgba(0,0,0,.6); }
-    #medicPanel button { background: #2a3a4a; color: #fff; border: 1px solid #57a; border-radius: 4px;
-                         padding: 5px 12px; font-family: monospace; cursor: pointer; margin-top: 4px; }
-    #medicPanel button:disabled { opacity: 0.4; cursor: default; }
+
+    /* notifications (ui.ts showMsg): a stack in the top-right corner, newest on top. Each
+       is a dark plate edged in its kind's colour, its icon in a ringed slate socket and a
+       bar along the bottom running down its time; a lore note is a paper slip instead. */
+    #toasts { flex: none; width: 340px; display: flex; flex-direction: column; gap: 6px; }
+    #toasts:empty { display: none; }   /* no gap above the boards when there is nothing to say */
+    .toast { --ac: #ffd166; --tint: rgba(255,209,102,.1); --glow: rgba(255,209,102,.25);
+      position: relative; overflow: hidden; display: flex; align-items: center; gap: 11px;
+      padding: 9px 14px 11px 10px; border-radius: 8px; pointer-events: auto; cursor: pointer;
+      font-size: 14px; line-height: 1.4; color: var(--ink); text-shadow: 0 1px 0 rgba(0,0,0,.7);
+      background: linear-gradient(90deg, var(--tint), transparent 60%), linear-gradient(180deg, rgba(34,24,16,.94), rgba(16,11,8,.94));
+      border: 1px solid rgba(0,0,0,.75); border-left: 3px solid var(--ac);
+      box-shadow: inset 0 1px 0 rgba(255,214,160,.12), 0 6px 18px rgba(0,0,0,.45);
+      animation: toast-in .3s cubic-bezier(.2,.9,.3,1.15); transition: opacity .25s ease, translate .25s ease; }
+    .toast.out { opacity: 0; translate: 30px 0; pointer-events: none; }
+    .toast-ic { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%;
+      font-size: 17px; line-height: 1; text-shadow: none;
+      background: radial-gradient(circle at 50% 35%, #2a2e35, #121418);
+      box-shadow: 0 0 0 2px var(--ac), 0 0 0 3px #120e0b, 0 0 12px var(--glow), inset 0 2px 4px rgba(0,0,0,.7); }
+    .toast-tx { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .toast-tx small { display: block; margin-bottom: 1px; font-size: 10.5px; font-weight: 600; letter-spacing: .12em;
+      text-transform: uppercase; color: var(--ac); }
+    .toast-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--ac); opacity: .7;
+      transform-origin: left; animation: toast-time linear forwards; }
+    @keyframes toast-in { from { opacity: 0; translate: 40px 0; } }
+    @keyframes toast-time { to { transform: scaleX(0); } }
+    .t-hint    { --ac: #e7a35a; --tint: rgba(231,163,90,.1);   --glow: rgba(231,163,90,.2); }
+    .t-good    { --ac: #6dd6c8; --tint: rgba(109,214,200,.14); --glow: rgba(109,214,200,.35); }
+    .t-danger  { --ac: #ff6a5a; --tint: rgba(255,90,74,.2);    --glow: rgba(255,90,74,.45); }
+    .t-weather { --ac: #8ec5ff; --tint: rgba(142,197,255,.14); --glow: rgba(142,197,255,.3); }
+    .t-player  { --ac: #9be37a; --tint: rgba(155,227,122,.12); --glow: rgba(155,227,122,.3); }
+    .t-status  { --ac: #b9ad94; --tint: rgba(185,173,148,.08); --glow: transparent; }
+    .t-note { --ac: #8a5a24; --glow: transparent; color: #3a2814; text-shadow: none; font-style: italic;
+      background: linear-gradient(180deg, #ead8aa, #d8bf8a); border-color: #5a4126; }
+    .t-note .toast-ic { background: radial-gradient(circle at 50% 35%, #f6ead0, #c9ad78); box-shadow: 0 0 0 2px var(--ac), 0 0 0 3px #5a4126; }
+    .t-note .toast-tx small { font-style: normal; }
+
+    /* the quickbar: slate sockets, each with the key that uses it */
+    #quickbar { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; pointer-events: auto; }
+    .slot { white-space: nowrap; }
+    #quickbar .slot { display: inline-flex; align-items: center; gap: 5px; height: 40px; box-sizing: border-box; padding: 0 10px;
+      font: 600 15px/1 var(--serif); color: var(--ink);
+      background: linear-gradient(180deg, #1a1c21, #272a31); border: 2px solid #0a0b0d; border-radius: 7px;
+      box-shadow: inset 0 2px 6px rgba(0,0,0,.7), 0 1px 0 rgba(255,220,170,.14), 0 3px 8px rgba(0,0,0,.4); }
+    #quickbar .slot.tool, #quickbar .slot.use { cursor: pointer; }
+    #quickbar .slot:hover { border-color: #6b4a2e; }
+    #quickbar .slot.eq { border-color: #c99a3c; background: linear-gradient(180deg, #3a2d14, #4a3818);
+      box-shadow: inset 0 2px 6px rgba(0,0,0,.5), 0 0 10px rgba(255,209,102,.35); }
+    /* a keycap: the quickbar's key badges, the menu buttons' and the boards' */
+    .slot .kb, #btns kbd, .board kbd {
+      font: 600 10.5px/1 var(--serif); padding: 2px 4px 3px; border-radius: 3px; white-space: nowrap; text-shadow: none;
+      color: #2b1b0d; background: linear-gradient(180deg, #efe2c4, #d2bd93); border: 1px solid #5a4126; box-shadow: 0 1px 0 #5a4126; }
+    .slot .kb { margin-left: 1px; }
+
+    /* the menu buttons: wooden plank keys, the key that opens each on its corner */
+    #btns { display: flex; gap: 6px; padding-top: 6px; pointer-events: auto; }
+    #btns button { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+      min-width: 54px; height: 50px; box-sizing: border-box; padding: 3px 9px 2px;
+      font: 600 12px/1.1 var(--serif); color: var(--ink); text-shadow: 0 1px 0 rgba(0,0,0,.6);
+      background: linear-gradient(180deg, #8d6342, #6b4a2e 60%, #5a3d26); border: 2px solid var(--edge); border-radius: 7px;
+      box-shadow: inset 0 1px 0 rgba(255,225,180,.35), inset 0 -2px 0 rgba(0,0,0,.25), 0 3px 0 var(--edge), 0 6px 12px rgba(0,0,0,.4);
+      transition: filter .15s ease; }
+    #btns button:hover { filter: brightness(1.14); color: #fff; }
+    #btns button:active { transform: translateY(2px);
+      box-shadow: inset 0 1px 0 rgba(255,225,180,.3), inset 0 -2px 0 rgba(0,0,0,.25), 0 1px 0 var(--edge), 0 3px 6px rgba(0,0,0,.4); }
+    #btns .ic { font-size: 19px; line-height: 1; }
+    #btns kbd { position: absolute; top: -8px; right: -6px; }
+    #btns kbd:empty { display: none; }
+    #quitBtn { color: #f6d2c8; background: linear-gradient(180deg, #7e3d37, #5e2b27 60%, #4c2220) !important; }
+
+    /* ---- boards: every in-game window ---- */
+    .board {
+      position: relative; box-sizing: border-box; display: none; flex-direction: column;
+      padding-top: 24px; border: 7px solid transparent; border-radius: 8px;
+      color: var(--ink); font: 14px/1.45 var(--serif); pointer-events: auto;
+      background:
+        linear-gradient(90deg, transparent calc(25% - 1px), rgba(0,0,0,.42) calc(25% - 1px) 25%, rgba(255,214,160,.05) 25% calc(25% + 1px), transparent calc(25% + 1px)
+          calc(50% - 1px), rgba(0,0,0,.42) calc(50% - 1px) 50%, rgba(255,214,160,.05) 50% calc(50% + 1px), transparent calc(50% + 1px)
+          calc(75% - 1px), rgba(0,0,0,.42) calc(75% - 1px) 75%, rgba(255,214,160,.05) 75% calc(75% + 1px), transparent calc(75% + 1px)) padding-box,
+        repeating-linear-gradient(90deg, rgba(255,230,190,.022) 0 2px, transparent 2px 9px) padding-box,
+        linear-gradient(180deg, rgba(0,0,0,0), rgba(0,0,0,.25)) padding-box,
+        linear-gradient(90deg, #33231a 0 25%, #2c1e15 25% 50%, #35251b 50% 75%, #2e2017 75%) padding-box,
+        linear-gradient(180deg, #b38450 0%, #8a6040 16%, #6b4a2e 58%, #4a3322 100%) border-box;
+      box-shadow: 0 0 0 2px var(--edge), inset 0 0 0 2px var(--edge), inset 0 14px 26px rgba(0,0,0,.5), 0 20px 60px rgba(0,0,0,.7);
+      animation: board-pop .22s cubic-bezier(.2,.9,.3,1.15);
+    }
+    @keyframes board-pop { from { opacity: 0; translate: 0 -10px; scale: .97; } }
+    /* the windows that stop play, centred over everything */
+    .modal, #chestPanel { position: fixed; inset: 0; z-index: 14; margin: auto; height: fit-content;
+      width: min(var(--w, 560px), calc(100vw / var(--uiz, 1) - 32px)); max-height: calc(84vh / var(--uiz, 1)); }
+    #helpModal { --w: 700px; }
+    #controlsModal { --w: 560px; }
+    #chestPanel { --w: 480px; }
+    /* leaving the world: small, on top of any other window, the world dimmed behind it */
+    #quitModal { --w: 400px; z-index: 15; text-align: center;
+      box-shadow: 0 0 0 2px var(--edge), inset 0 0 0 2px var(--edge), inset 0 14px 26px rgba(0,0,0,.5), 0 20px 60px rgba(0,0,0,.7),
+                  0 0 0 100vmax rgba(4,3,8,.55); }
+    .quit-text { margin: 4px 0 0; font-size: 15px; line-height: 1.5; }
+    .quit-acts { display: flex; justify-content: center; gap: 12px; margin-top: 16px; }
+    .quit-acts button { min-width: 128px; padding: 9px 16px; font-size: 14.5px; }
+    /* the boards that stay up while playing: Build and Craft by their buttons, the medic over the quickbar */
+    #craftPanel, #buildPanel { width: 310px; max-height: 100%; }
+    #medicPanel { width: min(380px, 100%); margin-top: 22px; text-align: center; }   /* room for its plaque */
+
+    /* the name, carved into a plaque nailed across the top edge */
+    .board-title { position: absolute; left: 50%; top: -24px; transform: translateX(-50%); z-index: 3; isolation: isolate;
+      display: flex; align-items: center; gap: 8px; margin: 0; padding: 7px 26px 8px; white-space: nowrap;
+      font: 600 17px/1.1 var(--serif); color: var(--brass); text-shadow: 0 2px 0 #3d230e, 0 0 12px rgba(255,186,84,.3);
+      filter: drop-shadow(0 5px 5px rgba(0,0,0,.55)); }
+    .board-title::before, .board-title::after { content: ""; position: absolute;
+      clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0 calc(100% - 8px), 0 8px); }
+    .board-title::after { inset: -2px; z-index: -2; background: var(--edge); }
+    .board-title::before { inset: 0; z-index: -1;
+      background:
+        radial-gradient(circle at 11px 50%, #f0d08a 0 1.4px, #8a6224 1.9px 3px, rgba(0,0,0,.5) 3.2px 3.9px, transparent 4.1px),
+        radial-gradient(circle at calc(100% - 11px) 50%, #f0d08a 0 1.4px, #8a6224 1.9px 3px, rgba(0,0,0,.5) 3.2px 3.9px, transparent 4.1px),
+        linear-gradient(180deg, rgba(255,230,180,.32) 0 2px, transparent 2px calc(100% - 3px), rgba(0,0,0,.45) calc(100% - 3px)),
+        repeating-linear-gradient(90deg, rgba(0,0,0,.06) 0 1px, transparent 1px 7px),
+        linear-gradient(180deg, #93673f, #6c482c 55%, #563922); }
+    /* an iron stud that closes the board */
+    .board .board-x { position: absolute; top: 3px; right: 5px; z-index: 3; width: 24px; height: 24px; padding: 0 0 2px;
+      font: 700 16px/1 var(--serif); color: #e9dcc0; text-shadow: 0 1px 0 #000; border-radius: 50%;
+      background: radial-gradient(circle at 35% 30%, #5d5248, #2a241f 70%); border: 1px solid #120e0b;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 2px 3px rgba(0,0,0,.5); }
+    .board .board-x:hover { filter: none; color: #fff; background: radial-gradient(circle at 35% 30%, #8a463c, #3e1f1a 70%); }
+    .board .board-x:active { transform: translateY(1px); box-shadow: inset 0 1px 0 rgba(255,255,255,.12); }
+    .board-hint { margin: 0 34px 8px; text-align: center; font-size: 12px; font-style: italic; line-height: 1.4; color: var(--ink-dim); }
+    /* only the inside scrolls, so the plaque and the stud stay put */
+    .board-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 2px 16px 16px;
+      scrollbar-width: thin; scrollbar-color: #8a6040 transparent; }
+    .board-group { margin: 14px 0 6px; padding-bottom: 4px; display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+      font-size: 14px; font-style: italic; color: var(--brass);
+      border-bottom: 1px solid rgba(0,0,0,.55); box-shadow: 0 1px 0 rgba(255,214,160,.07); }
+    .board-group:first-child { margin-top: 2px; }
+    .board-group .tag { font-size: 11.5px; color: #9fd08a; }
+    .board-group .tag.off { color: #e98a7a; }
+    .board b { color: var(--brass); }
+
+    /* buttons are planks that press in; the main one is a brass plate */
+    .board button { font: 600 13px/1.2 var(--serif); color: var(--ink); text-shadow: 0 1px 0 rgba(0,0,0,.6); cursor: pointer;
+      padding: 6px 11px; border-radius: 5px; border: 2px solid var(--edge);
+      background: linear-gradient(180deg, #8d6342, #6b4a2e 60%, #5a3d26);
+      box-shadow: inset 0 1px 0 rgba(255,225,180,.3), inset 0 -2px 0 rgba(0,0,0,.25), 0 3px 0 var(--edge); }
+    .board button:hover:not(:disabled) { filter: brightness(1.14); color: #fff; }
+    .board button:active:not(:disabled) { transform: translateY(2px);
+      box-shadow: inset 0 1px 0 rgba(255,225,180,.3), inset 0 -2px 0 rgba(0,0,0,.25), 0 1px 0 var(--edge); }
+    .board button:disabled { opacity: .45; filter: saturate(.35); }
+    .board button.primary, .board button.sel { color: #2a1406; text-shadow: 0 1px 0 rgba(255,240,200,.5); border-color: #5c3410;
+      background: linear-gradient(180deg, #ffe7a3, #ffc457 45%, #e7932f);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.6), inset 0 -2px 0 rgba(120,60,10,.35), 0 3px 0 #5c3410; }
+    .board button.primary:hover:not(:disabled), .board button.sel:hover { color: #2a1406; }
+    .board button.danger { color: #fbe1d8; border-color: #2a0d0a;
+      background: linear-gradient(180deg, #a3483e, #7e3029 55%, #66241f);
+      box-shadow: inset 0 1px 0 rgba(255,200,180,.35), inset 0 -2px 0 rgba(0,0,0,.25), 0 3px 0 #2a0d0a; }
+
+    /* Craft and Build: a row per recipe, its cost beside it */
+    .recipe { display: flex; align-items: center; gap: 9px; margin: 5px 0; }
+    .recipe button { flex: none; width: 150px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .recipe .cost { color: var(--ink-dim); font-size: 12.5px; }
+    .recipe .placing { color: #9fd08a; font-size: 12px; font-style: italic; }
+
+    /* the bag: a grid of slate sockets per kind of thing */
+    .inv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(98px, 1fr)); gap: 6px; }
+    #inv .slot { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+      min-height: 74px; box-sizing: border-box; padding: 9px 5px 7px; white-space: normal; text-align: center;
+      background: linear-gradient(180deg, #17191d, #24272d); border: 2px solid #0a0b0d; border-radius: 7px;
+      box-shadow: inset 0 3px 8px rgba(0,0,0,.75), 0 1px 0 rgba(255,220,170,.12); }
+    #inv .slot .ic { font-size: 24px; line-height: 1; filter: drop-shadow(0 2px 1px rgba(0,0,0,.6)); }
+    #inv .slot .nm { font-size: 12px; line-height: 1.2; color: var(--ink); }
+    #inv .slot .ct { position: absolute; top: 3px; right: 6px; font-size: 12px; font-weight: 600; color: var(--brass); text-shadow: 0 1px 0 #000; }
+    #inv .slot .act { font-size: 11px; font-style: italic; line-height: 1.2; color: var(--ink-dim); }
+    #inv .slot.empty { opacity: .45; }
+    #inv .slot.place, #inv .slot.tool, #inv .slot.use { cursor: pointer; }
+    #inv .slot.place:hover, #inv .slot.tool:hover, #inv .slot.use:hover { border-color: #8a6040; background: linear-gradient(180deg, #1f2126, #2c2f36); }
+    #inv .slot.sel, #inv .slot.eq { border-color: #c99a3c; background: linear-gradient(180deg, #33281a, #43341c);
+      box-shadow: inset 0 2px 6px rgba(0,0,0,.5), 0 0 10px rgba(255,209,102,.3); }
+    #inv .slot.sel .act, #inv .slot.eq .act { color: var(--brass); font-style: normal; }
+    #inv .slot.off { opacity: .45; }
+
+    /* the chest: a ledger, chest on one side and the bag on the other */
+    .chest-table { width: 100%; border-collapse: collapse; }
+    .chest-table th { padding: 0 4px 6px; font-size: 12px; font-weight: 400; font-style: italic; color: var(--ink-dim); }
+    .chest-table th:first-child { text-align: left; }
+    .chest-table td { padding: 5px 4px; border-top: 1px solid rgba(0,0,0,.45); }
+    .chest-table td.n { width: 54px; text-align: center; font-weight: 600; color: var(--brass); }
+    .chest-table .mv { display: flex; gap: 4px; justify-content: flex-end; }
+    .chest-table button { min-width: 34px; padding: 3px 6px; font-size: 12px; }
+
+    /* the medic */
+    .medic-offer { margin: 0; font-size: 15px; }
+    .medic-time { margin: 2px 0 0; font-size: 12px; font-style: italic; color: var(--ink-dim); }
+    .medic-acts { display: flex; justify-content: center; gap: 10px; margin-top: 12px; }
+
+    /* how to play */
+    #helpModal table { width: 100%; border-collapse: collapse; }
+    #helpModal td { padding: 6px 12px 6px 0; vertical-align: top; border-bottom: 1px solid rgba(0,0,0,.4); }
+    #helpModal td:first-child { white-space: nowrap; }
+    #helpModal p { line-height: 1.6; }
+
     /* keyboard choice in a panel (ui.ts navSync); shown only while the keys are in use */
     body.kb-nav .kbsel { outline: 2px solid #ffd97a; outline-offset: 1px; box-shadow: 0 0 10px rgba(255,217,122,.45); }
-    .slot .kb { margin-left: 4px; padding: 0 3px; border-radius: 3px; font-size: 10px; color: #cde; background: #2a3a4a; border: 1px solid #57a; }
-    #controlsModal { width: 520px; }
 
     /* ---- key-binding editor (src/controlsUI.ts): the in-game window and the title screen's Controls page ---- */
     .kb-list { display: grid; grid-template-columns: 1fr auto auto; gap: 4px 8px; align-items: center; }
@@ -434,24 +608,24 @@
 
     /* controls: keycaps on the board */
     #menu-controls { width: min(600px, calc(100vw - 40px)); }
-    #menu .kb-group { margin: 16px 0 4px; padding-bottom: 6px; font-size: 16px; font-style: italic; letter-spacing: 0; text-transform: none;
+    #menu .kb-group, #controlsModal .kb-group { margin: 16px 0 4px; padding-bottom: 6px; font-size: 16px; font-style: italic; letter-spacing: 0; text-transform: none;
       color: var(--brass); border-bottom: 1px solid rgba(0,0,0,.55); box-shadow: 0 1px 0 rgba(255,214,160,.07); }
-    #menu .kb-group:first-child { margin-top: 0; }
-    #menu .kb-name { color: var(--ink); font-size: 15px; }
-    #menu .kb-list { gap: 7px 10px; }
-    #menu .menu-card button.kb-key { min-width: 84px; padding: 7px 10px 8px; font-size: 14px; color: #2b1b0d; text-shadow: none;
+    #menu .kb-group:first-child, #controlsModal .kb-group:first-child { margin-top: 0; }
+    #menu .kb-name, #controlsModal .kb-name { color: var(--ink); font-size: 15px; }
+    #menu .kb-list, #controlsModal .kb-list { gap: 7px 10px; }
+    #menu .menu-card button.kb-key, #controlsModal button.kb-key { min-width: 84px; padding: 7px 10px 8px; font-size: 14px; color: #2b1b0d; text-shadow: none;
       background: linear-gradient(180deg, #f3e7cb, #d6c197); border: 1px solid #5a4126; border-radius: 6px;
       box-shadow: inset 0 1px 0 #fffaf0, 0 3px 0 #5a4126, 0 5px 8px rgba(0,0,0,.4); }
-    #menu .menu-card button.kb-key:hover { color: #000; border-color: #5a4126; }
-    #menu .menu-card button.kb-key:active { transform: translateY(2px); box-shadow: inset 0 1px 0 #fffaf0, 0 1px 0 #5a4126, 0 2px 4px rgba(0,0,0,.4); }
-    #menu .menu-card button.kb-key.empty { color: #8c7759; background: rgba(0,0,0,.28); border: 1px dashed #6b5233; box-shadow: none; }
-    #menu .menu-card button.kb-key.listening { color: #2a1406; border-color: #5c3410; background: linear-gradient(180deg, #ffe7a3, #ffc457);
+    #menu .menu-card button.kb-key:hover, #controlsModal button.kb-key:hover { color: #000; border-color: #5a4126; }
+    #menu .menu-card button.kb-key:active, #controlsModal button.kb-key:active { transform: translateY(2px); box-shadow: inset 0 1px 0 #fffaf0, 0 1px 0 #5a4126, 0 2px 4px rgba(0,0,0,.4); }
+    #menu .menu-card button.kb-key.empty, #controlsModal button.kb-key.empty { color: #8c7759; background: rgba(0,0,0,.28); border: 1px dashed #6b5233; box-shadow: none; }
+    #menu .menu-card button.kb-key.listening, #controlsModal button.kb-key.listening { color: #2a1406; border-color: #5c3410; background: linear-gradient(180deg, #ffe7a3, #ffc457);
       box-shadow: 0 3px 0 #5c3410, 0 0 16px rgba(255,200,90,.55); }
-    #menu .menu-card button.kb-reset { min-width: 0; color: var(--ink); text-shadow: 0 1px 0 rgba(0,0,0,.6); border: 2px solid var(--edge);
+    #menu .menu-card button.kb-reset, #controlsModal button.kb-reset { min-width: 0; color: var(--ink); text-shadow: 0 1px 0 rgba(0,0,0,.6); border: 2px solid var(--edge);
       background: linear-gradient(180deg, #8d6342, #6b4a2e 60%, #5a3d26);
       box-shadow: inset 0 1px 0 rgba(255,225,180,.35), 0 4px 0 var(--edge), 0 8px 14px rgba(0,0,0,.45); }
-    #menu .kb-status { color: var(--brass); font-size: 14px; }
-    #menu .kb-note { color: var(--ink-dim); font-size: 12.5px; font-style: italic; }
+    #menu .kb-status, #controlsModal .kb-status { color: var(--brass); font-size: 14px; }
+    #menu .kb-note, #controlsModal .kb-note { color: var(--ink-dim); font-size: 12.5px; font-style: italic; }
 
     /* ---- motion ---- */
     @keyframes twinkle { 0%, 100% { opacity: .95; } 50% { opacity: .35; } }
@@ -501,11 +675,11 @@
     /* Listed out rather than relying on `button` alone: the in-game panels declare
        `cursor: pointer` at ID specificity, which would otherwise win. */
     button, input, select, textarea, .menu-toggle, [data-back],
-    #menu button, #btns button, .recipe button, #chestPanel button, #medicPanel button, #devPanel button, .kb-key,
+    #menu button, #btns button, .board button, #devPanel button, .kb-key,
     .slot.place, .slot.tool, .slot.use {
       cursor: url('/sprites/cursor_pointer.svg') 2 1, pointer;
     }
-    button:disabled, .recipe button:disabled, #chestPanel button:disabled, #medicPanel button:disabled {
+    button:disabled, .board button:disabled {
       cursor: url('/sprites/cursor.svg') 2 1, default;
     }
   </style>
@@ -625,28 +799,69 @@
       </div>
     </div>
   </div>
-  <div id="hud"></div>
-  <div id="objective"></div>
-  <div id="msg"></div>
-  <div id="quickbar"></div>
-  <div id="btns">
-    <button id="invBtn">Bag [<span data-key="inventory"></span>]</button>
-    <button id="craftBtn">Craft [<span data-key="craft"></span>]</button>
-    <button id="buildBtn">Build [<span data-key="build"></span>]</button>
-    <button id="controlsBtn">Keys [<span data-key="controls"></span>]</button>
-    <button id="helpBtn">? [<span data-key="help"></span>]</button>
-    <button id="quitBtn">Quit</button>
+  <!-- The in-game interface in three bands: see IN-GAME INTERFACE in the styles. -->
+  <div id="gameUi">
+    <div class="ui-upper">
+      <div class="ui-l">
+        <div id="hud"></div>
+        <div id="uiDev"></div>
+      </div>
+      <div class="ui-r">
+        <div id="toasts" aria-live="polite"></div>
+        <div class="ui-boards">
+          <div id="buildPanel" class="board">
+            <h3 class="board-title">🧱 Build</h3>
+            <button class="board-x" data-close title="Close">×</button>
+            <p class="board-hint">Paid for in crafted materials · choose a piece, then <span data-key="place"></span> places it in front of you</p>
+            <div class="board-body"></div>
+          </div>
+          <div id="craftPanel" class="board">
+            <h3 class="board-title">🛠 Craft</h3>
+            <button class="board-x" data-close title="Close">×</button>
+            <p class="board-hint"><span data-key="craft"></span> or Esc closes · a station's recipes work while you stand near it</p>
+            <div class="board-body"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="ui-band ui-bot">
+      <div class="ui-l" id="uiMeter"></div>
+      <div class="ui-c">
+        <div id="medicPanel" class="board">
+          <h3 class="board-title">🩺 A medic's offer</h3>
+          <div class="board-body"></div>
+        </div>
+        <div id="quickbar"></div>
+      </div>
+      <div class="ui-r">
+        <div id="btns">
+          <button id="invBtn" title="Bag"><span class="ic">🎒</span>Bag<kbd data-key="inventory"></kbd></button>
+          <button id="craftBtn" title="Craft"><span class="ic">🛠</span>Craft<kbd data-key="craft"></kbd></button>
+          <button id="buildBtn" title="Build"><span class="ic">🧱</span>Build<kbd data-key="build"></kbd></button>
+          <button id="controlsBtn" title="Controls"><span class="ic">⌨️</span>Keys<kbd data-key="controls"></kbd></button>
+          <button id="helpBtn" title="How to play"><span class="ic">❓</span>Help<kbd data-key="help"></kbd></button>
+          <button id="quitBtn" title="Quit to the title screen"><span class="ic">🚪</span>Quit</button>
+        </div>
+      </div>
+    </div>
   </div>
-  <div id="craftPanel"></div>
-  <div id="buildPanel"></div>
-  <div id="chestPanel"><div class="chest-body"></div></div>
-  <div id="medicPanel"></div>
-  <div id="invModal" class="modal">
-    <h3>🎒 Inventory <span class="hint">(<span data-key="inventory"></span> or ESC to close · click an item, or pick it with the arrows and <span data-key="uiConfirm"></span> · a chosen 🔨 item is placed with a click or <span data-key="place"></span>)</span></h3>
-    <div id="inv"></div>
+  <div id="chestPanel" class="board">
+    <h3 class="board-title">📦 Chest</h3>
+    <button class="board-x" data-close title="Close">×</button>
+    <p class="board-hint">Esc closes · shared with every keeper · choose a button and press <span data-key="uiConfirm"></span></p>
+    <div class="board-body chest-body"></div>
   </div>
-  <div id="helpModal" class="modal">
-    <h3>❓ How to play <span class="hint">(<span data-key="help"></span> or ESC to close · every key can be changed under Keys [<span data-key="controls"></span>])</span></h3>
+  <div id="invModal" class="modal board">
+    <h3 class="board-title">🎒 Bag</h3>
+    <button class="board-x" data-close title="Close">×</button>
+    <p class="board-hint"><span data-key="inventory"></span> or Esc closes · click an item, or pick it with the arrows and <span data-key="uiConfirm"></span> · a chosen 🔨 piece is placed with a click or <span data-key="place"></span></p>
+    <div class="board-body"><div id="inv"></div></div>
+  </div>
+  <div id="helpModal" class="modal board">
+    <h3 class="board-title">❓ How to play</h3>
+    <button class="board-x" data-close title="Close">×</button>
+    <p class="board-hint"><span data-key="help"></span> or Esc closes · every key can be changed under Keys [<span data-key="controls"></span>]</p>
+    <div class="board-body">
     <table>
       <tr><td><kbd data-key="moveUp"></kbd> <kbd data-key="moveLeft"></kbd> <kbd data-key="moveDown"></kbd> <kbd data-key="moveRight"></kbd></td><td>Move (mud slows you; cliffs need jumping; falls hurt)</td></tr>
       <tr><td><kbd data-key="jump"></kbd></td><td>Jump — clears 2-level ledges</td></tr>
@@ -679,10 +894,26 @@
     Place farm plots outdoors to grow wheat and glowcap. Decor items (banners, rugs, vases, fences) are zone-restricted — your Bag shows a hint when they cannot be placed. Mines can be furnished as underground hideouts: place chests and beds inside dug tunnels.</p>
     <p><b>Boats:</b> craft one, open your Bag, click the boat to SELECT it, then walk into the sea to sail. Without a selected boat you will swim — much slower, and hot or freezing seas deal damage over time. Icebergs destroy wooden boats — a Starmetal-reinforced hull smashes through.</p>
     <p><b>Goal:</b> follow the hidden notes 📜 across five distant islands, awaken all 4 Monoliths with forged Cores, build the World Engine at the Core Void, survive the final assault.</p>
+    </div>
   </div>
-  <div id="controlsModal" class="modal">
-    <h3>⌨ Controls <span class="hint">(<span data-key="controls"></span> or ESC to close · also under Settings on the title screen)</span></h3>
-    <div id="controlsBody"></div>
+  <div id="controlsModal" class="modal board">
+    <h3 class="board-title">⌨️ Controls</h3>
+    <button class="board-x" data-close title="Close">×</button>
+    <p class="board-hint"><span data-key="controls"></span> or Esc closes · also under Settings on the title screen</p>
+    <div class="board-body"><div id="controlsBody"></div></div>
+  </div>
+  <!-- asked before leaving the world (main.ts quitToMenu → ui.ts confirmQuit) -->
+  <div id="quitModal" class="modal board" role="alertdialog" aria-labelledby="quitTitle">
+    <h3 class="board-title" id="quitTitle">🚪 Leave the world?</h3>
+    <button class="board-x" data-close title="Stay">×</button>
+    <p class="board-hint">Esc stays · arrows and <span data-key="uiConfirm"></span> choose</p>
+    <div class="board-body">
+      <p class="quit-text">You will return to the title screen. You can join the world again from Play.</p>
+      <div class="quit-acts">
+        <button data-quit="stay">Stay</button>
+        <button class="danger" data-quit="leave">Leave world</button>
+      </div>
+    </div>
   </div>
   <script type="module" src="/src/boot.ts"></script>
 </body>
