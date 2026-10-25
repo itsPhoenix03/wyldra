@@ -18,7 +18,9 @@
 //	HEARTH_ALLOW_WARP     enables the unvalidated test teleport when set
 //	HEARTH_SAVE_DIR       directory for per-world saves   (default: working directory)
 //	HEARTH_SAVE_PATH      save file, single-world setups only (legacy override)
-//	HEARTH_NO_PERSIST     set to disable persistence entirely
+//	HEARTH_NO_PERSIST     set to disable persistence entirely (wins over HEARTH_STORE)
+//	HEARTH_STORE          save backend: json (default) or postgres
+//	DATABASE_URL          Postgres connection string; required when HEARTH_STORE=postgres
 //	HEARTH_DEFS_PATH      shared/defs.json                (default: found by walking up)
 //	DEV                   shortens crop growth 30x, as in the legacy server
 //
@@ -36,10 +38,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"hearth/gameserver/auth"
 	"hearth/gameserver/defs"
 	"hearth/gameserver/hosting"
 	"hearth/gameserver/net"
+	"hearth/gameserver/persist/pgstore"
 )
 
 func env(key, def string) string {
@@ -72,13 +77,35 @@ func main() {
 		logger.Fatalf("[hearth] cannot obtain the ticket public key: %v", err)
 	}
 
+	persist := os.Getenv("HEARTH_NO_PERSIST") == ""
+
+	// Postgres saves: connect and check the schema now, so a wrong URL, a
+	// down database or a forgotten migration stops the boot with a reason
+	// instead of surfacing as a failed save (or a world refusing to build) on
+	// the first join.
+	var db *pgxpool.Pool
+	if persist && hostCfg.Store == hosting.StorePostgres {
+		bootCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		db, err = pgstore.Connect(bootCtx, hostCfg.DatabaseURL)
+		if err == nil {
+			err = pgstore.RequireSchema(bootCtx, db)
+		}
+		cancel()
+		if err != nil {
+			logger.Fatalf("[hearth] %v", err)
+		}
+		defer db.Close()
+		logger.Printf("[hearth] saves: postgres %s", pgstore.Redact(hostCfg.DatabaseURL))
+	}
+
 	mgr := hosting.NewManager(hosting.Options{
 		Config:    hostCfg,
 		Defs:      d,
 		Logger:    logger,
 		AllowWarp: os.Getenv("HEARTH_ALLOW_WARP") != "",
 		Dev:       os.Getenv("DEV") != "",
-		Persist:   os.Getenv("HEARTH_NO_PERSIST") == "",
+		Persist:   persist,
+		DB:        db,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

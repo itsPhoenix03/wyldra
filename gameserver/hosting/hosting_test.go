@@ -49,7 +49,7 @@ func isolateEnv(t *testing.T) {
 	for _, k := range []string{
 		"HEARTH_INSTANCE_ID", "HEARTH_WORLDS", "HEARTH_WORLD_ID", "HEARTH_WORLD_SEED",
 		"HEARTH_SEED", "HEARTH_WORLD_NAME", "HEARTH_EAGER_WORLDS", "HEARTH_SAVE_DIR",
-		"HEARTH_SAVE_PATH",
+		"HEARTH_SAVE_PATH", "HEARTH_STORE", "DATABASE_URL", "HEARTH_NO_PERSIST",
 	} {
 		t.Setenv(k, "")
 	}
