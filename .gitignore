@@ -22,6 +22,8 @@ vite.log
 # environment / secrets
 .env
 .env.*
+# the template is the one env file that IS committed (it holds no secrets)
+!.env.example
 # derived-userId HMAC key: machine-local, and rotating it orphans every save
 control/.id-secret
 

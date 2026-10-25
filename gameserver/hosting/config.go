@@ -78,7 +78,19 @@ type Config struct {
 	// Features are the process-wide feature-flag defaults from HEARTH_FEATURES
 	// ("tileMountains=0,cameraPeek=1"); a world's own `features` override them.
 	Features map[string]bool
+	// Store is the save backend, from HEARTH_STORE: StoreJSON (the default —
+	// one file per world in SaveDir) or StorePostgres (DatabaseURL).
+	Store string
+	// DatabaseURL is the Postgres connection string (DATABASE_URL). Only read
+	// when Store is StorePostgres. Never log it: it carries the password.
+	DatabaseURL string
 }
+
+// Save backends (HEARTH_STORE).
+const (
+	StoreJSON     = "json"
+	StorePostgres = "postgres"
+)
 
 // WorldFeatures is the flag set a world's room starts from: HEARTH_FEATURES,
 // then the world's registry entry over it.
@@ -128,7 +140,13 @@ func LoadConfig(logf func(string, ...any)) (Config, error) {
 		Eager:            os.Getenv("HEARTH_EAGER_WORLDS") != "",
 		SaveDir:          os.Getenv("HEARTH_SAVE_DIR"),
 		SavePathOverride: os.Getenv("HEARTH_SAVE_PATH"),
+		DatabaseURL:      strings.TrimSpace(os.Getenv("DATABASE_URL")),
 	}
+	store, err := storeBackend(os.Getenv("HEARTH_STORE"), cfg.DatabaseURL, os.Getenv("HEARTH_NO_PERSIST") != "", logf)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Store = store
 	var problems []string
 	cfg.Features, problems = room.ParseFeatures(os.Getenv("HEARTH_FEATURES"))
 	for _, p := range problems {
@@ -285,6 +303,30 @@ func normalizeWorld(w WorldSpec) (WorldSpec, error) {
 	return w, nil
 }
 
+// storeBackend validates HEARTH_STORE. Unlike most settings here, a bad value
+// refuses to boot: quietly saving to JSON when the operator asked for Postgres
+// would look fine until the day the JSON files are lost with the container.
+// HEARTH_NO_PERSIST wins over everything — nothing is saved anywhere, so no
+// database is needed.
+func storeBackend(raw, databaseURL string, noPersist bool, logf func(string, ...any)) (string, error) {
+	store := strings.ToLower(strings.TrimSpace(raw))
+	switch store {
+	case "", StoreJSON:
+		return StoreJSON, nil
+	case StorePostgres:
+		if noPersist {
+			logf("[hearth] HEARTH_STORE=postgres is ignored: HEARTH_NO_PERSIST is set, so nothing is saved")
+			return StorePostgres, nil
+		}
+		if databaseURL == "" {
+			return "", fmt.Errorf("hosting: HEARTH_STORE=postgres needs DATABASE_URL (postgres://user:pass@host:5432/db) — refusing to fall back to JSON saves; unset HEARTH_STORE to use them")
+		}
+		return StorePostgres, nil
+	default:
+		return "", fmt.Errorf("hosting: HEARTH_STORE=%q is not a save backend — use %q (default) or %q", raw, StoreJSON, StorePostgres)
+	}
+}
+
 // envInt parses an optional integer setting. A value that is not a number is a
 // typo worth mentioning rather than a reason to refuse to boot; it falls back
 // to the default (0, which normalizeWorld turns into DefaultMaxPlayers).
@@ -339,6 +381,15 @@ func (c Config) SavePath(worldID string) string {
 	return filepath.Join(c.SaveDir, "world."+worldID+".save.json")
 }
 
+// SaveTarget names where a world's save lives, for logs: the save file, or
+// the Postgres row (never the connection string).
+func (c Config) SaveTarget(worldID string) string {
+	if c.Store == StorePostgres {
+		return "postgres:world_snapshots/" + worldID
+	}
+	return c.SavePath(worldID)
+}
+
 // Summary is the one-line boot log of what this process hosts.
 func (c Config) Summary() string {
 	parts := make([]string, 0, len(c.Worlds))
@@ -349,8 +400,12 @@ func (c Config) Summary() string {
 	if c.Eager {
 		mode = "eager"
 	}
-	return fmt.Sprintf("instance=%s worlds=[%s] build=%s from %s",
-		c.InstanceID, strings.Join(parts, " "), mode, c.Source)
+	store := c.Store
+	if store == "" {
+		store = StoreJSON
+	}
+	return fmt.Sprintf("instance=%s worlds=[%s] build=%s store=%s from %s",
+		c.InstanceID, strings.Join(parts, " "), mode, store, c.Source)
 }
 
 func envOr(key, def string) string {

@@ -157,6 +157,19 @@ the world, with keepers respawning at spawn; a different seed or newer version s
 **One live session per identity**: a second ticket for a live `userId` evicts the first, which
 receives `{t:'kick',reason:'replaced'}`. This fixes the duplicate-browser-tab clone.
 
+### Automatic reconnect
+An unexpected socket close, or 15s with no frame (the watchdog; `cre` arrives every 200ms),
+starts `src/reconnect.ts`. Each attempt gets a FRESH ticket pinned to the session's `worldId`,
+so every player of a world lands back in that world on the server the registry names. Backoff
+is ~0.5/1/2/4/5s with ±20% jitter, for a 2 min budget. It keeps retrying on an unreachable
+control plane, 5xx, a refused socket, or authfail `world-unavailable`/`expired`. It gives up to
+the menu on a 4xx, any other authfail, a `kick`, or a different world coming back. On `init` the
+old Phaser game is torn down exactly as a quit does and a new one adopts the admitted socket
+(`swapToSession`); there is no in-place reset. Quit, `kick` and `authfail` never start it, and
+`?legacy=1` keeps its toast. Worst-case loss on a hard crash is one save interval (30s); a
+graceful SIGINT/SIGTERM saves first. Proven by a headless harness and a headless-Chrome run
+during development (not checked in).
+
 ### Modular building
 A second placement system beside legacy `structures`, keyed **`tile:slot`** so one tile can
 carry a floor, two wall edges, a roof, a fixture and a decor piece at once. 19 module kinds
@@ -301,9 +314,10 @@ player's and enemy's attack radius and heading (`src/devOverlay.ts`; radii mirro
    `HEARTH_ID_SECRET` before running more than one control plane. `control/test.mjs` proves it
    by spawning a genuinely restarted instance (`:8096`) and comparing the two ticket `userId`s,
    plus distinctness across toks and that the id really is keyed (`:8095`, different secret).
-2. **Room codes are still cosmetic.** `requestJoin()` sends only `{name, tok}` — no `worldId` —
-   and `src/menu.ts` collects a room code into localStorage and sends it nowhere. The multi-world
-   backend is complete and proven; this is now pure wiring on the menu and join call.
+2. **Room codes are still cosmetic.** `requestJoin()` now takes an optional `worldId` (the
+   reconnect uses it), but `src/menu.ts` still collects a room code into localStorage and sends
+   it nowhere, so a fresh join always lands in the default world. Room codes should become
+   `worlds.join_code` (Postgres) rather than being wired to raw worldIds.
 3. **No durable storage in the control plane.** Profiles and the world registry are in-memory,
    behind the `store.js` seam designed for a DB swap. No longer fatal — item 1 moved the save
    key out of that Map — but a restart still drops `name` and `createdAt` (the client re-sends
@@ -331,12 +345,29 @@ player's and enemy's attack radius and heading (`src/devOverlay.ts`; radii mirro
 ## 6. Deliberately deferred (owner's decision — do not start without asking)
 
 - **Elevation rework** — `docs/ELEVATION_AND_WORLD_EDGE_GUIDE.md`
-- **Postgres/Redis room architecture** — `docs/MULTIPLAYER_ROOM_ARCHITECTURE_GUIDE.md`
+- **Redis** (session locks, presence, room-owner leases/fencing) — only needed once more than
+  one `hearthd` process runs. Postgres is no longer deferred: see §7.0.
 - **`docs/07_REMAINING_IMPLEMENTATION_ROADMAP.md`** — owner said to ignore new doc additions
 
 ---
 
 ## 7. Next feature work
+
+0. **Postgres persistence — ACTIVE (started 2026-10-25, branch `feat/db-setup-auto-reconnect`).**
+   Owner's call: Postgres now, Redis stays deferred (§6). The owner is provisioning one Postgres
+   instance; until it is reachable, work is limited to setup that needs no live connection —
+   schema/migrations, `DATABASE_URL` config plumbing, the Go `persist.Store` Postgres
+   implementation behind a flag (JSON stays the default), and tests that skip without a DB.
+   Baseline at the start: ~20% of the DB work done (the `persist.Store` seam, the save format and
+   migrations, derived `userId`); no driver, schema or connection code existed.
+   **Done, not yet run against a real DB:** schema `gameserver/persist/pgstore/migrations/`
+   (`go run ./cmd/dbmigrate`), `PgStore` (`HEARTH_STORE=postgres` + `DATABASE_URL`; Save
+   never blocks the tick because it hands off to one writer goroutine per world), the
+   `go run ./cmd/importsave` JSON→Postgres importer, and DB tests that skip without
+   `HEARTH_TEST_DATABASE_URL`. See `docs/11_POSTGRES_SETUP.md` for setup and the
+   needs-a-live-DB list. **Next, once the DB is up:** verify that list, then move
+   `control/store.js` onto `players`/`worlds`, then room CRUD/join codes.
+   Pinned `pgx v5.7.6`: newer releases require Go 1.25.
 
 1. ~~**Modular building system**~~ **SHIPPED** (§4). What the guide still lists as open and
    this pass did not do: no rotation at all (the block art has no meaningful facing; railings and

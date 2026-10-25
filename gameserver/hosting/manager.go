@@ -2,12 +2,18 @@ package hosting
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"log"
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"hearth/gameserver/defs"
 	"hearth/gameserver/persist"
+	"hearth/gameserver/persist/pgstore"
 	"hearth/gameserver/room"
 )
 
@@ -38,6 +44,9 @@ type Options struct {
 	Dev       bool // the GROW_DIV crop-growth knob, not a permission
 	Persist   bool
 	SaveEvery time.Duration
+	// DB is the process-wide Postgres pool, required when Config.Store is
+	// StorePostgres (and Persist is on); every world's store shares it.
+	DB *pgxpool.Pool
 }
 
 // Manager owns the rooms this process hosts.
@@ -70,7 +79,8 @@ type Manager struct {
 
 	mu      sync.Mutex
 	rooms   map[string]*entry
-	ctx     context.Context // room lifetime; nil until Start
+	closers map[string]io.Closer // stores to close once their room stops
+	ctx     context.Context      // room lifetime; nil until Start
 	stopped bool
 	wg      sync.WaitGroup
 }
@@ -90,7 +100,7 @@ func NewManager(o Options) *Manager {
 	if o.Logger == nil {
 		o.Logger = log.Default()
 	}
-	m := &Manager{opts: o, log: o.Logger, rooms: map[string]*entry{}, identities: room.NewRegistry()}
+	m := &Manager{opts: o, log: o.Logger, rooms: map[string]*entry{}, closers: map[string]io.Closer{}, identities: room.NewRegistry()}
 	m.build = m.buildRoom
 	return m
 }
@@ -188,13 +198,24 @@ func (m *Manager) start(runCtx context.Context, e *entry) {
 	go func() {
 		defer m.wg.Done()
 		r.Run(runCtx)
+		// Run has handed its final save to the store; a store that writes in
+		// the background (PgStore) lands it here, before Wait can return.
+		m.mu.Lock()
+		c := m.closers[e.spec.WorldID]
+		delete(m.closers, e.spec.WorldID)
+		m.mu.Unlock()
+		if c != nil {
+			if err := c.Close(); err != nil {
+				m.log.Printf("[hearth] world %q: %v", e.spec.WorldID, err)
+			}
+		}
 		m.log.Printf("[hearth] world %q stopped", e.spec.WorldID)
 	}()
 
 	spawn := r.Spawn()
 	m.log.Printf("[hearth] world %q ready in %s (spawn=(%d,%d), save=%s)",
 		e.spec.WorldID, time.Since(began).Round(time.Millisecond),
-		spawn[0], spawn[1], m.opts.Config.SavePath(e.spec.WorldID))
+		spawn[0], spawn[1], m.opts.Config.SaveTarget(e.spec.WorldID))
 
 	e.room = r
 	close(e.done)
@@ -202,11 +223,11 @@ func (m *Manager) start(runCtx context.Context, e *entry) {
 
 // buildRoom is the real constructor: one world, one store, one room.
 func (m *Manager) buildRoom(spec WorldSpec) (*room.Room, error) {
-	var store persist.Store = persist.NopStore{}
-	if m.opts.Persist {
-		store = persist.NewJSONStore(m.opts.Config.SavePath(spec.WorldID))
+	store, err := m.openStore(spec)
+	if err != nil {
+		return nil, err
 	}
-	return room.New(room.Config{
+	r, err := room.New(room.Config{
 		WorldID:    spec.WorldID,
 		Seed:       spec.Seed,
 		MaxPlayers: spec.MaxPlayers,
@@ -221,6 +242,63 @@ func (m *Manager) buildRoom(spec WorldSpec) (*room.Room, error) {
 		// output stays readable.
 		Logger: log.New(m.log.Writer(), m.log.Prefix()+"["+spec.WorldID+"] ", m.log.Flags()),
 	})
+	c, closes := store.(io.Closer)
+	if err != nil {
+		if closes {
+			_ = c.Close()
+		}
+		return nil, err
+	}
+	if closes {
+		m.mu.Lock()
+		m.closers[spec.WorldID] = c
+		m.mu.Unlock()
+	}
+	return r, nil
+}
+
+// openStore picks the world's save backend: nothing (HEARTH_NO_PERSIST), the
+// JSON file, or Postgres.
+func (m *Manager) openStore(spec WorldSpec) (persist.Store, error) {
+	if !m.opts.Persist {
+		return persist.NopStore{}, nil
+	}
+	if m.opts.Config.Store != StorePostgres {
+		return persist.NewJSONStore(m.opts.Config.SavePath(spec.WorldID)), nil
+	}
+	if m.opts.DB == nil {
+		return nil, errors.New("hosting: HEARTH_STORE=postgres but no database pool was opened")
+	}
+	pg := pgstore.New(m.opts.DB, spec.WorldID, pgstore.Options{})
+	// The save is read HERE, and a failed read fails the build, because
+	// room.New treats a Load error as "no save" and starts the world fresh —
+	// harmless for an unreadable local file, but with Postgres it would turn a
+	// database blip at boot into the world being overwritten by an empty one
+	// on the first save. Refusing the build keeps the save intact; the next
+	// join retries.
+	snap, err := pg.Load()
+	if err != nil {
+		_ = pg.Close()
+		return nil, fmt.Errorf("hosting: world %q: cannot read its save, not starting it empty: %w", spec.WorldID, err)
+	}
+	return &preloaded{PgStore: pg, snap: snap}, nil
+}
+
+// preloaded hands the room the snapshot openStore already read, so the save is
+// read once and the room is built from exactly the read that succeeded. Every
+// later call — Save, Archive, Close, and any second Load — goes to the PgStore.
+type preloaded struct {
+	*pgstore.PgStore
+	snap *persist.Snapshot
+	used bool
+}
+
+func (p *preloaded) Load() (*persist.Snapshot, error) {
+	if !p.used {
+		p.used = true
+		return p.snap, nil
+	}
+	return p.PgStore.Load()
 }
 
 // Identities is the process-wide session registry every room shares. For tests.

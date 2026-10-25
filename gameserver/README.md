@@ -41,9 +41,10 @@ process (docs/10 §11). See `hosting/` and the Environment table below.
 | `auth/` | offline Ed25519 ticket verification, boot-time pubkey fetch |
 | `room/` | the simulation: the single-goroutine room loop, movement validation, chunk streaming |
 | `net/` | the WebSocket edge: reader/writer goroutines, the `auth` handshake |
-| `persist/` | the save seam (`Store` interface, no-op and JSON implementations) |
+| `persist/` | the save seam (`Store` interface, no-op and JSON implementations); `persist/pgstore/` is the Postgres store plus the schema migrations (`docs/11_POSTGRES_SETUP.md`) |
 | `defs/` | loads `shared/defs.json`, the one source of truth for recipes, node/structure/crop data |
 | `cmd/hearthd/` | the binary |
+| `cmd/dbmigrate/`, `cmd/importsave/` | apply the Postgres schema; copy a JSON save into Postgres |
 
 The concurrency contract is documented at the top of `room/room.go`. Short
 version: **all game state is owned by the `Room.Run` goroutine and guarded by no
@@ -88,7 +89,9 @@ $env:HEARTH_ALLOW_WARP = "1"; go run ./cmd/hearthd
 | `HEARTH_ALLOW_WARP` | unset | enables `{t:'warp'}`, the unvalidated test-only teleport |
 | `HEARTH_SAVE_DIR` | working directory | where `world.<worldId>.save.json` files are written |
 | `HEARTH_SAVE_PATH` | — | pin the save file; single-world processes only, ignored (with a warning) when several worlds are hosted |
-| `HEARTH_NO_PERSIST` | unset | disables persistence entirely |
+| `HEARTH_NO_PERSIST` | unset | disables persistence entirely; wins over `HEARTH_STORE` |
+| `HEARTH_STORE` | `json` | save backend: `json` (one file per world, as above) or `postgres`. Any other value refuses to boot |
+| `DATABASE_URL` | — | Postgres connection string, required when `HEARTH_STORE=postgres` (boot fails without it rather than falling back to JSON); the schema must be current (`go run ./cmd/dbmigrate`). See `docs/11_POSTGRES_SETUP.md` |
 | `HEARTH_DEFS_PATH` | found by walking up for `shared/defs.json` | rules data |
 | `DEV` | unset | shortens crop growth 30x (`GROW_DIV`), as in the legacy server |
 

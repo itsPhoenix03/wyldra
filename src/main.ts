@@ -42,6 +42,7 @@ import { ROTATABLE_MODS, facing, facingCount } from "./rotation.ts";
 import { TileStore, UNLOADED, CHUNK, MAX_ELEV, type ChunkMsg } from "./tiles.ts";
 import { MountainView, faceAt, mountainFaces, stratumAt, type PeakHost } from "./peaks.ts";
 import { LEGACY, LEGACY_WS_PORT, takeJoin, identityToken } from "./net.ts";
+import { Rejoin, type Rejoined, type RejoinPhase } from "./reconnect.ts";
 
 const TW = 64,
   TH = 32;
@@ -259,8 +260,15 @@ interface BirdEntry {
 class Hearth extends Phaser.Scene {
   ws!: WebSocket;
   // set by quitToMenu() before the socket is closed, so the onclose handler knows the
-  // disconnect was intentional and must NOT raise the 60s "server down" toast
+  // disconnect was intentional and must NOT start a reconnect
   quitting = false;
+  /** The world this session's ticket bound (Go path). A reconnect asks for exactly this one. */
+  worldId: string | null = null;
+  /** This scene was built to adopt a reconnected socket (swapToSession), not by a fresh join. */
+  rejoined = false;
+  // link watchdog (checkLink): when the last frame arrived and when update() last ran
+  private lastMsgAt = 0;
+  private lastFrameAt = 0;
   id = "";
   /**
    * Terrain. Streamed from the Go server one 64x64 chunk at a time (§4); the client no
@@ -510,7 +518,11 @@ class Hearth extends Phaser.Scene {
       this.myName = localStorage.getItem("hearth-name") || "Keeper";
     }
     if (LEGACY) this.connectLegacy();
-    else this.connectViaControlPlane();
+    else if (adoptNext) {
+      const s = adoptNext;
+      adoptNext = null;
+      this.adopt(s);
+    } else this.connectViaControlPlane();
 
     // Keys arrive through onKey() (routed from the page-level listener at the bottom of
     // this file, after the panels have had their share); held keys are read in update().
@@ -530,7 +542,7 @@ class Hearth extends Phaser.Scene {
     const uiApi = getUiApi();
     this.updateUI = uiApi;
     this.uiApi = uiApi;
-    showMsg("Connecting to The Hearth...");
+    if (!this.rejoined) showMsg("Connecting to The Hearth...");
 
     // Red vignette flash for player damage — create once, reuse (Guide §2.4)
     this.vignetteRect = this.add
@@ -808,6 +820,7 @@ class Hearth extends Phaser.Scene {
       .then((j) => {
         if (this.quitting || !this.scene.isActive()) return;
         if (j.name) this.myName = j.name;
+        this.worldId = j.worldId;
         this.openSocket(j.ws, () => this.send({ t: "auth", ticket: j.ticket }));
       })
       .catch((err: Error) => {
@@ -837,22 +850,120 @@ class Hearth extends Phaser.Scene {
   }
 
   private openSocket(url: string, onOpen: () => void) {
-    this.ws = new WebSocket(url);
-    this.ws.onopen = onOpen;
-    this.ws.onmessage = (e) => {
-      if (this.quitting) return;
-      this.dev.onNet(e.data.length);
-      this.onMsg(JSON.parse(e.data));
+    const ws = new WebSocket(url);
+    this.ws = ws;
+    ws.onopen = onOpen;
+    this.attachSocket(ws);
+  }
+
+  /**
+   * Route a socket's frames and its close to this scene. Both handlers check that the
+   * socket is still the scene's own, so a late event from a replaced socket stays inert
+   * even if its handlers were somehow not nulled.
+   */
+  private attachSocket(ws: WebSocket) {
+    this.lastMsgAt = performance.now();
+    ws.onmessage = (e) => {
+      if (this.quitting || ws !== this.ws) return;
+      this.onFrame(e.data);
     };
-    this.ws.onclose = () => {
-      if (this.quitting) return; // intentional quit — stay silent
+    ws.onclose = () => {
+      if (this.quitting || ws !== this.ws) return; // intentional quit — stay silent
+      this.onSocketLost(ws);
+    };
+  }
+
+  private onFrame(data: string) {
+    this.lastMsgAt = performance.now();
+    this.dev.onNet(data.length);
+    this.onMsg(JSON.parse(data));
+  }
+
+  /**
+   * Take over a socket the reconnect loop already got admitted (src/reconnect.ts). Its
+   * buffered frames (`init` first, then the chunk burst) are replayed after create() has
+   * returned, exactly as if they had just arrived. Until then the loop's own handlers keep
+   * buffering; replay and handover happen in one synchronous step, so nothing can slip in
+   * between or arrive out of order.
+   */
+  private adopt(s: Rejoined) {
+    this.rejoined = true;
+    this.worldId = s.worldId;
+    if (s.name) this.myName = s.name;
+    this.ws = s.ws;
+    setTimeout(() => {
+      if (this.quitting || activeScene !== this || this.ws !== s.ws) return;
+      this.attachSocket(s.ws);
+      for (const d of s.buf.splice(0)) {
+        if (this.quitting || this.ws !== s.ws) return; // a replayed frame quit or lost the link
+        this.onFrame(d);
+      }
+      // Closed while waiting to be adopted: its close event has already fired, so act on it now.
+      if (s.closed || s.ws.readyState === WebSocket.CLOSING || s.ws.readyState === WebSocket.CLOSED)
+        this.onSocketLost(s.ws);
+    }, 0);
+  }
+
+  /**
+   * The game socket is gone without anyone asking for it (server crash or restart, network
+   * drop, or checkLink giving up on a silent link). On the Go path that starts a reconnect
+   * to the same world. The intentional paths (quit, `kick`, `authfail`) never get here:
+   * each runs quitToMenu first, which sets `quitting` and nulls the handlers.
+   */
+  private onSocketLost(ws: WebSocket) {
+    // Detach first: nothing this socket does from now on (a late frame, a stale `kick` for
+    // the session the reconnect replaces, its close) can reach any scene.
+    ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+    try {
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.close(4000, "link lost");
+    } catch {
+      /* already closing */
+    }
+    if (LEGACY || !this.worldId) {
       showMsg(
         LEGACY
           ? "Disconnected. Is the server running? (npm run server)"
           : "Disconnected from the world server. (cd gameserver && go run ./cmd/hearthd)",
         60000,
       );
-    };
+      return;
+    }
+    if (rejoin) return;
+    this.freeze();
+    startRejoin(this.myName, this.worldId);
+  }
+
+  /**
+   * Hold the world still while reconnecting. `ready = false` stops update() and every input
+   * path that checks it; panels close and placement drops so nothing is left half-done; the
+   * game loop sleeps, which keeps the last frame on screen and the main thread idle. The
+   * scene is replaced, not resumed, once the reconnect lands (swapToSession).
+   */
+  private freeze() {
+    this.ready = false;
+    uiApiSingleton?.closeAll();
+    this.setPlacing(null);
+    this.setPlacingMod(null);
+    showMsg("", 1);
+    try {
+      if (this.audio.started && this.audio.ctx.state === "running") this.audio.ctx.suspend().catch(() => {});
+    } catch {
+      /* no audio */
+    }
+    this.game.loop.sleep();
+  }
+
+  /**
+   * A socket can die without a close event (a half-open TCP link after a network change).
+   * The server sends `cre` every 200ms tick, so LINK_TIMEOUT_MS of silence means the link
+   * is gone. One comparison per frame inside update(); a stalled or hidden tab (no frame
+   * for a while) restarts the window instead of blaming the socket for our own pause.
+   */
+  private checkLink() {
+    const now = performance.now();
+    if (now - this.lastFrameAt > 2000) this.lastMsgAt = now;
+    this.lastFrameAt = now;
+    if (now - this.lastMsgAt > LINK_TIMEOUT_MS && this.ws) this.onSocketLost(this.ws);
   }
 
   send(m: any) {
@@ -1919,6 +2030,13 @@ class Hearth extends Phaser.Scene {
 
   onMsg(m: any) {
     if (m.t === "init") {
+      // `init` comes once per socket, and a reconnect builds a whole new scene for its new
+      // socket (swapToSession) rather than re-running this on a live one. A second init here
+      // is a protocol violation, and building the world twice would leak every sprite.
+      if (this.id) {
+        console.warn("[net] ignoring a second init on a live session");
+        return;
+      }
       this.id = m.id;
       this.px = m.x;
       this.py = m.y;
@@ -1979,10 +2097,12 @@ class Hearth extends Phaser.Scene {
         }
       }
       this.ready = true;
-      showMsg(
-        `You are a Keeper. Follow the objective tracker (top right). Press ${keyLabel("craft")} to craft, ${keyLabel("controls")} for the controls.`,
-        6000,
-      );
+      if (this.rejoined) showMsg("Reconnected. Welcome back, Keeper.", 3000);
+      else
+        showMsg(
+          `You are a Keeper. Follow the objective tracker (top right). Press ${keyLabel("craft")} to craft, ${keyLabel("controls")} for the controls.`,
+          6000,
+        );
     } else if (m.t === "chunk") {
       this.applyChunkMsg(m as ChunkMsg);
     } else if (m.t === "feat") {
@@ -2013,6 +2133,9 @@ class Hearth extends Phaser.Scene {
           "The world server ended this session. You can join again from here.",
       });
     } else if (m.t === "pj") {
+      // the server broadcasts our own join to us as well: no ghost, and no "fellow Keeper"
+      // toast over the welcome (or "Reconnected") one
+      if (m.id === this.id) return;
       this.addOther(m.id, m.x, m.y, m.name);
       this.others.get(m.id)?.rig.setCloak(m.worn);
       this.others.get(m.id)?.rig.setArmor(m.armor);
@@ -4007,6 +4130,10 @@ class Hearth extends Phaser.Scene {
   update(t: number, dtMs: number) {
     this.dev.update(t);
     if (!this.ready) return;
+    if (!LEGACY) {
+      this.checkLink();
+      if (!this.ready) return; // the link was just declared lost: the scene is frozen
+    }
     this.streamZones(t);
     const dt = Math.min(dtMs / 1000, 0.05);
     let dx = +isHeld("moveRight") - +isHeld("moveLeft");
@@ -4505,6 +4632,120 @@ let game: Phaser.Game | null = null;
 let activeScene: Hearth | null = null;
 let uiApiSingleton: ReturnType<typeof initUI> | null = null;
 
+/* ─────────────────────────── automatic reconnect ───────────────────────────
+ * An unexpected close freezes the scene (Hearth.freeze) and starts a Rejoin loop
+ * (src/reconnect.ts): fresh ticket for the SAME worldId -> socket -> auth -> `init`. When
+ * one is admitted, swapToSession() tears the frozen game down exactly as a quit does and
+ * boots a new one whose scene adopts the already-admitted socket. The new scene starts from
+ * its constructor defaults, so nothing from the old session (sprites, chunk textures,
+ * players, creatures, timers, listeners) can survive into it, and it shows only what the
+ * server's `init` says: position, HP, inventory.
+ * Giving up (2 min, a 4xx, a final authfail, a kick) is quitToMenu with the reason.
+ */
+
+/** No frame for this long on a live session means the link is dead (server ticks every 200ms). */
+const LINK_TIMEOUT_MS = 15_000;
+/** A loss this soon after a successful rejoin continues that rejoin's budget and backoff. */
+const REJOIN_CARRY_MS = 15_000;
+/** The loop in flight, if any. Also gates in-game keys while frozen. */
+let rejoin: Rejoin | null = null;
+/** An admitted socket waiting for the next scene's create() to adopt it. */
+let adoptNext: Rejoined | null = null;
+/** Budget and backoff of the last successful rejoin, for REJOIN_CARRY_MS. */
+let rejoinCarry: { start: number; attempt: number; at: number } | null = null;
+
+const REJOIN_PHASE_TEXT: Record<RejoinPhase, string> = {
+  wait: "waiting",
+  ticket: "asking the login server for a pass",
+  socket: "reaching the world server",
+};
+
+function startRejoin(name: string, worldId: string) {
+  const c = rejoinCarry && Date.now() - rejoinCarry.at < REJOIN_CARRY_MS ? rejoinCarry : null;
+  rejoinCarry = null;
+  const r: Rejoin = new Rejoin(
+    name,
+    worldId,
+    {
+      onProgress(attempt, phase, waitMs) {
+        if (rejoin !== r) return;
+        const what =
+          phase === "wait" && waitMs !== undefined
+            ? `next try in ${Math.max(1, Math.round(waitMs / 1000))}s`
+            : REJOIN_PHASE_TEXT[phase];
+        showReconnect(`Attempt ${attempt} · ${what}`);
+      },
+      onReady(s) {
+        if (rejoin !== r) {
+          // cancelled in the same turn it landed: nobody will adopt it
+          s.ws.onopen = s.ws.onmessage = s.ws.onclose = s.ws.onerror = null;
+          s.ws.close(1000, "quit");
+          return;
+        }
+        rejoinCarry = { start: r.start, attempt: r.attempt, at: Date.now() };
+        swapToSession(s);
+      },
+      onGiveUp(message) {
+        if (rejoin !== r) return;
+        rejoin = null;
+        hideReconnect();
+        quitToMenu({ confirm: false, error: message });
+      },
+      refusalText(t, reason) {
+        return t === "kick"
+          ? KICK_REASON_MSG[reason] || "The world server ended this session. You can join again from here."
+          : AUTHFAIL_REASON_MSG[reason] ||
+              `The world server rejected your login (${reason || "invalid ticket"}). Try joining again.`;
+      },
+    },
+    c?.start,
+    c?.attempt,
+  );
+  rejoin = r;
+  showReconnect("Attempt 1 · waiting");
+  r.begin();
+}
+
+/** Close a rejoin that no scene will take, and an admitted socket no scene adopted. */
+function stopRejoin() {
+  rejoin?.cancel();
+  rejoin = null;
+  if (adoptNext) {
+    const ws = adoptNext.ws;
+    adoptNext = null;
+    ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+    try {
+      ws.close(1000, "quit");
+    } catch {
+      /* already closing */
+    }
+  }
+  hideReconnect();
+}
+
+/** The reconnect landed: replace the frozen game with a fresh one that adopts `s`. */
+function swapToSession(s: Rejoined) {
+  rejoin = null;
+  adoptNext = s;
+  hideReconnect();
+  teardownGame(false);
+  void launchGame();
+}
+
+// The indicator is one fixed element whose text changes only when the loop changes state
+// (a handful of writes per attempt) — never per frame.
+function showReconnect(detail: string) {
+  const el = document.getElementById("reconnect");
+  if (!el) return;
+  const d = el.querySelector<HTMLElement>(".rc-detail");
+  if (d) d.textContent = detail;
+  el.style.display = "block";
+}
+function hideReconnect() {
+  const el = document.getElementById("reconnect");
+  if (el) el.style.display = "none";
+}
+
 /** In-game DOM that must disappear when the player returns to the menu. */
 const GAME_DOM_IDS = [
   "hud",
@@ -4564,6 +4805,25 @@ export function quitToMenu(opts: { confirm?: boolean; error?: string } = {}) {
   if (opts.confirm !== false && !confirm("Leave the world and return to the main menu?"))
     return;
 
+  // 0. A reconnect in flight (or an admitted socket waiting for its scene) dies with us.
+  stopRejoin();
+
+  teardownGame(true);
+
+  // 9. Allow startGame() to boot a fresh world (cancelling one still loading), then let the menu take over.
+  gameStarted = false;
+  bootSeq++;
+  window.dispatchEvent(
+    new CustomEvent("hearth:quit", { detail: { error: opts.error } }),
+  );
+}
+
+/**
+ * Steps 1-8 of quitToMenu: everything that belongs to one Phaser.Game. A reconnect
+ * (swapToSession) runs it too, with `hideDom` false so the HUD stays up while the next game
+ * boots in its place.
+ */
+function teardownGame(hideDom: boolean) {
   const sc = activeScene;
 
   // 1. Close every panel and drop any pending placement (ui.ts calls back into the
@@ -4623,7 +4883,7 @@ export function quitToMenu(opts: { confirm?: boolean; error?: string } = {}) {
 
   // 6. Cancel any in-flight showMsg timer (e.g. a long error toast) and hide the HUD.
   showMsg("", 1);
-  for (const el of gameDomEls()) el.style.display = "none";
+  if (hideDom) for (const el of gameDomEls()) el.style.display = "none";
 
   // 7. The UI singleton outlives the game (see getUiApi), so its signature caches would
   //    otherwise carry into the next session and suppress the first redraw of an identical
@@ -4633,13 +4893,6 @@ export function quitToMenu(opts: { confirm?: boolean; error?: string } = {}) {
 
   // 8. The camera clamp counter-scales the DOM; the menu must not inherit that factor.
   document.documentElement.style.setProperty("--uiz", "1");
-
-  // 9. Allow startGame() to boot a fresh world (cancelling one still loading), then let the menu take over.
-  gameStarted = false;
-  bootSeq++;
-  window.dispatchEvent(
-    new CustomEvent("hearth:quit", { detail: { error: opts.error } }),
-  );
 }
 
 // Delegated so it survives the menu re-rendering the #btns row, and so it can only ever
@@ -4653,7 +4906,7 @@ document.addEventListener("click", (e) => {
 // theirs first (ui.ts handleKey), the live scene the rest. Bindings live in keybinds.ts.
 document.addEventListener("keydown", (e) => {
   const sc = activeScene;
-  if (!sc || isTyping(e)) return;
+  if (!sc || rejoin || isTyping(e)) return; // frozen while reconnecting: nothing is queued
   if (uiApiSingleton?.handleKey(e) || sc.onKey(e)) e.preventDefault();
 });
 
@@ -4664,6 +4917,11 @@ let bootSeq = 0;
 export async function startGame() {
   if (gameStarted) return;
   gameStarted = true;
+  await launchGame();
+}
+
+/** Boot one Phaser.Game: from the menu (startGame) or in place of a frozen one (swapToSession). */
+async function launchGame() {
   // The menu has usually decoded these already (boot.ts); a quit while waiting cancels the start.
   const seq = ++bootSeq;
   try {
@@ -4672,6 +4930,8 @@ export async function startGame() {
   } catch (e) {
     if (seq !== bootSeq) return;
     gameStarted = false;
+    stopRejoin(); // a reconnect's admitted socket has no scene to go to
+    for (const el of gameDomEls()) el.style.display = "none";
     window.dispatchEvent(new CustomEvent("hearth:quit", { detail: { error: `Could not load the game art (${(e as Error).message}).` } }));
     return;
   }
