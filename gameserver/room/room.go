@@ -148,6 +148,7 @@ type Room struct {
 	structures  map[int]*Structure
 	furn        map[int]*Furniture
 	digs        map[int]bool
+	mineParent  map[int]int // union-find over digs: which carved tiles are one mine (mines.go)
 	torches     map[int]bool
 	nodeHP      map[int]int   // tile -> remaining hp, only while damaged
 	removed     map[int]int64 // tile -> wall-clock ms at which the node returns
@@ -305,6 +306,7 @@ func New(cfg Config) (*Room, error) {
 		infected:      map[int]int64{},
 		furn:          map[int]*Furniture{},
 		digs:          map[int]bool{},
+		mineParent:    map[int]int{},
 		torches:       map[int]bool{},
 		nodeHP:        map[int]int{},
 		removed:       map[int]int64{},
@@ -861,7 +863,7 @@ func (r *Room) loadSave() error {
 	}
 	for _, i := range snap.Digs {
 		if inWorld(i) {
-			r.digs[i] = true
+			r.carve(i)
 		}
 	}
 	for _, i := range snap.Torches {
