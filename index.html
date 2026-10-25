@@ -40,6 +40,19 @@
     .slot.use { cursor: pointer; border-color: #4aa; }
     .slot.use:hover { background: rgba(30,60,60,.85); }
     #btns { position: fixed; bottom: 8px; right: 8px; z-index: 10; display: flex; gap: 6px; }
+    /* Shown by main.ts while an automatic reconnect runs (the world is frozen behind it).
+       Text changes only when the reconnect changes state; the dot's pulse is opacity-only. */
+    #reconnect { position: fixed; top: 34%; left: 50%; transform: translate(-50%, -50%); z-index: 13;
+                 zoom: var(--uiz, 1); display: none; pointer-events: none; text-align: center;
+                 background: rgba(10,15,20,.92); border: 1px solid #57a; border-radius: 10px;
+                 padding: 14px 22px; color: #fff; font-size: 14px; box-shadow: 0 8px 40px rgba(0,0,0,.6); }
+    #reconnect .rc-title { color: #ffd97a; font-size: 16px; margin-bottom: 6px; }
+    #reconnect .rc-dot { display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%;
+                         background: #ffd97a; vertical-align: middle; animation: rc-pulse 1.2s ease-in-out infinite; }
+    #reconnect .rc-detail { color: #cfd6e0; }
+    #reconnect .rc-hint { color: #889; font-size: 12px; margin-top: 8px; }
+    @keyframes rc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+    @media (prefers-reduced-motion: reduce) { #reconnect .rc-dot { animation: none; } }
     #btns button { background: #2a3a4a; color: #fff; border: 1px solid #57a; border-radius: 6px;
                    padding: 8px 14px; font-family: monospace; font-size: 14px; cursor: pointer; }
     #quitBtn { border-color: #a5626a; color: #f0c2c2; }
@@ -628,6 +641,11 @@
   <div id="hud"></div>
   <div id="objective"></div>
   <div id="msg"></div>
+  <div id="reconnect" role="status" aria-live="polite">
+    <div class="rc-title"><span class="rc-dot"></span>Connection lost — reconnecting…</div>
+    <div class="rc-detail"></div>
+    <div class="rc-hint">Your view is frozen until you are back in. Quit returns to the menu.</div>
+  </div>
   <div id="quickbar"></div>
   <div id="btns">
     <button id="invBtn">Bag [<span data-key="inventory"></span>]</button>

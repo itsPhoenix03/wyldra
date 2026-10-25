@@ -46,37 +46,56 @@ export function identityToken(): string {
 
 // A join requested ahead of time (boot.ts, the moment Play is pressed), so the ticket
 // round trip overlaps loading the atlases and the game chunk instead of following them.
-let early: { name: string; at: number; p: Promise<JoinTicket> } | null = null;
+let early: { name: string; worldId: string | null; at: number; p: Promise<JoinTicket> } | null = null;
 /** Tickets live 30s (control/PROTOCOL.md); one older than this is re-requested rather than risked. */
 const EARLY_MAX_AGE_MS = 20_000;
 
-export function prefetchJoin(name: string) {
-  early = { name, at: Date.now(), p: requestJoin(name) };
+export function prefetchJoin(name: string, worldId?: string) {
+  early = { name, worldId: worldId ?? null, at: Date.now(), p: requestJoin(name, worldId) };
   early.p.catch(() => {}); // surfaced by takeJoin's caller, not as an unhandled rejection
 }
 
-/** The prefetched join if it is for `name` and still fresh, otherwise a new request. Single use. */
-export function takeJoin(name: string): Promise<JoinTicket> {
+/**
+ * The prefetched join if it is for `name` (and the same `worldId`) and still fresh,
+ * otherwise a new request. Single use.
+ */
+export function takeJoin(name: string, worldId?: string): Promise<JoinTicket> {
   const e = early;
   early = null;
-  if (e && e.name === name && Date.now() - e.at < EARLY_MAX_AGE_MS) return e.p;
-  return requestJoin(name);
+  if (e && e.name === name && e.worldId === (worldId ?? null) && Date.now() - e.at < EARLY_MAX_AGE_MS)
+    return e.p;
+  return requestJoin(name, worldId);
+}
+
+/**
+ * A failed join. `status` is the control plane's HTTP status when it answered at all; it is
+ * absent when it could not be reached (or answered nonsense), which a reconnect treats as
+ * worth retrying, whereas a 4xx is a refusal and is final.
+ */
+export class JoinError extends Error {
+  constructor(message: string, readonly status?: number) {
+    super(message);
+  }
 }
 
 /**
  * POST /api/join on the control plane. Resolves with the ticket + the game-server WS URL.
- * Rejects with a player-readable Error on any transport or protocol failure.
+ * Rejects with a player-readable JoinError on any transport or protocol failure.
+ *
+ * `worldId` asks for a particular world (a reconnect pins the one the session was in). It
+ * is a request, not an assertion: the control plane answers with the world it resolved,
+ * which is the default one when the id is unknown (control/PROTOCOL.md §1).
  */
-export async function requestJoin(name: string): Promise<JoinTicket> {
+export async function requestJoin(name: string, worldId?: string): Promise<JoinTicket> {
   let res: Response;
   try {
     res = await fetch(`${CONTROL_URL}/api/join`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name, tok: identityToken() }),
+      body: JSON.stringify(worldId ? { name, tok: identityToken(), worldId } : { name, tok: identityToken() }),
     });
   } catch {
-    throw new Error(
+    throw new JoinError(
       `Could not reach the login server at ${CONTROL_URL}. Is it running? (npm run control)`,
     );
   }
@@ -87,10 +106,11 @@ export async function requestJoin(name: string): Promise<JoinTicket> {
     /* fall through to the status check */
   }
   if (!res.ok)
-    throw new Error(
+    throw new JoinError(
       `Login refused (${res.status}): ${body?.error || "unknown error"}`,
+      res.status,
     );
   if (!body?.ticket || !body?.ws)
-    throw new Error("Login server returned an incomplete ticket.");
+    throw new JoinError("Login server returned an incomplete ticket.");
   return body as JoinTicket;
 }

@@ -299,6 +299,17 @@ try {
   if (pF.worldId !== 'frontier' || pF.instanceId !== 'inst-2') fail('multiworld: ticket did not bind frontier: ' + JSON.stringify(pF));
   console.log('multiworld OK: ticket bound to frontier/inst-2');
 
+  // --- reconnect shape (src/reconnect.ts): the same tok asking again for the world it was in
+  // gets a fresh ticket for the same identity, the same world and the same game server ---
+  const reTok = 'test-' + Math.random().toString(36).slice(2);
+  const jR1 = await join('Rejoiner', reTok, { worldId: 'frontier' }, BASE2);
+  const jR2 = await join('Rejoiner', reTok, { worldId: 'frontier' }, BASE2);
+  const pR1 = payloadOf(jR1.body.ticket), pR2 = payloadOf(jR2.body.ticket);
+  if (jR2.body.worldId !== 'frontier' || jR2.body.ws !== jR1.body.ws) fail('rejoin: did not pin the same world/server: ' + JSON.stringify(jR2.body));
+  if (pR2.userId !== pR1.userId || pR2.worldId !== 'frontier' || pR2.instanceId !== 'inst-2') fail('rejoin: identity or binding changed: ' + JSON.stringify(pR2));
+  if (pR2.jti === pR1.jti || jR2.body.ticket === jR1.body.ticket) fail('rejoin: ticket was not fresh');
+  console.log('rejoin OK: same tok + worldId -> same userId, same world, fresh ticket');
+
   // --- multi-world: unknown and missing worldId fall back to the default ---
   const jUnknown = await join('Lost', 'test-' + Math.random().toString(36).slice(2), { worldId: 'nope-not-a-world' }, BASE2);
   if (jUnknown.body.worldId !== 'default') fail('multiworld: unknown worldId did not fall back: ' + jUnknown.body.worldId);
