@@ -305,6 +305,11 @@ export class FolkView {
     return this.camps.flatMap((c) => [c.hutY * size + c.hutX, c.fireY * size + c.fireX]);
   }
 
+  /** A village fire burns within r tiles of (x, y): it is a campfire like any a keeper builds. */
+  fireNear(x: number, y: number, r: number): boolean {
+    return this.camps.some((c) => Math.hypot(c.fireX - x, c.fireY - y) <= r);
+  }
+
   /** Place the camps whose tiles have streamed in. */
   placePending() {
     if (!this.pending.length) return;

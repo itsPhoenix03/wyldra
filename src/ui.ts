@@ -7,14 +7,77 @@ import { actionsFor, isMenuAction, keyLabel, matches, paintKeyLabels, setMenuCap
 import { mountControls } from './controlsUI.ts';
 
 const $ = (id: string) => document.getElementById(id)!;
-let msgTimer = 0;
+/** A board's scrolling inside (index.html: plaque, close stud and hint stay above it). */
+const body = (id: string) => $(id).querySelector<HTMLElement>('.board-body') || $(id);
 // set by initUI() so reset() can reach the singleton's closure state without exporting it
 let resetSession: (() => void) | null = null;
 
-export function showMsg(s: string, ms = 3500) {
-  const el = $('msg');
-  el.textContent = s; el.style.display = 'block';
-  clearTimeout(msgTimer); msgTimer = window.setTimeout(() => (el.style.display = 'none'), ms);
+// ---- notifications -------------------------------------------------------------------
+// The game's messages stack in the top-right corner (#toasts), newest on top. Each wears an
+// icon in a socket and the colour of its kind, with a bar running down the time it has left.
+// A message already showing is refreshed rather than shown twice; a click dismisses one.
+export type ToastKind = 'info' | 'hint' | 'good' | 'danger' | 'weather' | 'player' | 'note' | 'status';
+const TOAST_ICON: Record<ToastKind, string> = {
+  info: '✦', hint: '✋', good: '✨', danger: '⚠️', weather: '☁️', player: '👤', note: '📜', status: '⏳',
+};
+// the small heading over the text; the kinds without one are plain messages
+const TOAST_HEAD: Partial<Record<ToastKind, string>> = {
+  danger: 'Danger', weather: 'Weather', player: 'Keepers', note: 'A note',
+};
+// a message's own leading icon (🌧 Rain sweeps…) moves into the socket, and picks its kind
+// when the caller named none
+const LEAD_ICON = /^(\p{Extended_Pictographic}️?)\s*/u;
+const ICON_KIND: Record<string, ToastKind> = {
+  '🌧': 'weather', '🌪': 'weather', '❄': 'weather', '☀': 'weather',
+  '⚔': 'danger', '💥': 'danger', '🔥': 'danger',
+  '✨': 'good', '⚡': 'good', '💊': 'good', '🌱': 'good',
+};
+const TOAST_MAX = 4;
+const toastTimers = new Map<HTMLElement, number>();
+
+function dropToast(el: HTMLElement) {
+  clearTimeout(toastTimers.get(el));
+  toastTimers.delete(el);
+  if (el.classList.contains('out')) return;
+  el.classList.add('out');
+  window.setTimeout(() => el.remove(), 260);   // after the slide out
+}
+
+/** Show a notification. An empty message clears them all (quitting to the menu). */
+export function showMsg(s: string, ms = 3500, kind?: ToastKind) {
+  const box = $('toasts');
+  if (!s) {
+    for (const el of Array.from(box.children) as HTMLElement[]) { clearTimeout(toastTimers.get(el)); el.remove(); }
+    toastTimers.clear();
+    return;
+  }
+  const lead = s.match(LEAD_ICON);
+  const text = lead ? s.slice(lead[0].length) : s;
+  const k: ToastKind = kind ?? (lead ? ICON_KIND[lead[1].replace('️', '')] : undefined) ?? 'info';
+  let el = (Array.from(box.children) as HTMLElement[]).find((x) => x.dataset.msg === s && !x.classList.contains('out'));
+  if (el) {
+    box.prepend(el);
+    // restart the time bar
+    const bar = el.querySelector<HTMLElement>('.toast-bar')!;
+    bar.style.animation = 'none';
+    void bar.offsetWidth;
+    bar.style.animation = '';
+  } else {
+    el = document.createElement('div');
+    el.className = `toast t-${k}`;
+    el.dataset.msg = s;
+    const head = TOAST_HEAD[k];
+    el.innerHTML = `<span class="toast-ic"></span><div class="toast-tx">${head ? `<small>${head}</small>` : ''}<span></span></div><i class="toast-bar"></i>`;
+    el.querySelector('.toast-ic')!.textContent = lead ? lead[1] : TOAST_ICON[k];
+    el.querySelector('.toast-tx > span')!.textContent = text;   // server text: never parsed as markup
+    el.addEventListener('click', () => dropToast(el!));
+    box.prepend(el);
+    const live = (Array.from(box.children) as HTMLElement[]).filter((x) => !x.classList.contains('out'));
+    for (const old of live.slice(TOAST_MAX)) dropToast(old);
+  }
+  el.querySelector<HTMLElement>('.toast-bar')!.style.animationDuration = `${ms}ms`;
+  clearTimeout(toastTimers.get(el));
+  toastTimers.set(el, window.setTimeout(() => dropToast(el!), ms));
 }
 
 // Drop every scrap of per-session state (signature caches, selection, chest + medic offer)
@@ -22,7 +85,7 @@ export function showMsg(s: string, ms = 3500) {
 // an identical signature — e.g. the same medic offer — would otherwise never be drawn at all,
 // leaving its panel hidden. initUI() itself is deliberately NOT re-run (listeners would double).
 export function reset() {
-  clearTimeout(msgTimer); msgTimer = 0;
+  showMsg('');
   resetSession?.();
 }
 
@@ -35,7 +98,6 @@ export interface UIState {
   selectedVehicle: 'boat' | 'sboat' | null;
   mono: boolean[]; day: number; time: number; won: boolean;
   nearWorkbench: boolean; nearForge: boolean; nearCampfire: boolean;
-  structCount: (kind: string) => number;
   waveSecs: number;
   engineHp: number | null;
   zone: 'in' | 'out';
@@ -93,16 +155,18 @@ export function initUI(
     craftPanel: 'button[data-r]',
     buildPanel: 'button[data-mod]',
     chestPanel: 'button[data-res]',
-    controlsModal: 'button',
+    controlsModal: 'button:not(.board-x)',
     helpModal: '',
+    quitModal: 'button[data-quit]',
   };
   let stack: string[] = [];
   let navSel: HTMLElement | null = null;
   let navIn = '';
   const navKeys: Record<string, { key: string; i: number }> = {};
-  const isOpen = (id: string) => $(id).style.display === 'block';
+  // boards are flex columns (a fixed plaque over a scrolling body), so "open" is display:flex
+  const isOpen = (id: string) => $(id).style.display === 'flex';
   const setOpen = (id: string, open: boolean) => {
-    $(id).style.display = open ? 'block' : 'none';
+    $(id).style.display = open ? 'flex' : 'none';
     stack = stack.filter((x) => x !== id);
     if (open) stack.push(id);
     if (id === 'craftPanel') panelSig = '';
@@ -140,7 +204,7 @@ export function initUI(
   /** Move the choice to the nearest item on screen that way (lists, the bag's wrapped rows, the chest grid). */
   const navMove = (id: string, dx: number, dy: number) => {
     const items = itemsOf(id);
-    if (!items.length) { $(id).scrollTop += dy * 48; return; }   // the help sheet just scrolls
+    if (!items.length) { body(id).scrollTop += dy * 48; return; }   // the help sheet just scrolls
     const cur = navSel && items.includes(navSel) ? navSel : null;
     if (!cur) return mark(id, items[0]);
     const r = cur.getBoundingClientRect();
@@ -181,8 +245,27 @@ export function initUI(
   mountControls($('controlsBody'));
   // Clicking a HUD button or a panel entry must not leave the browser focus on it, or the
   // next Space / Enter would press it again instead of reaching the game.
-  for (const id of ['btns', 'quickbar', 'inv', 'craftPanel', 'buildPanel', 'chestPanel', 'medicPanel', 'controlsModal'])
+  for (const id of ['btns', 'quickbar', 'invModal', 'helpModal', 'craftPanel', 'buildPanel', 'chestPanel', 'medicPanel', 'controlsModal', 'quitModal'])
     $(id).addEventListener('mousedown', (e) => e.preventDefault());
+  // the leave-the-world question (api.confirmQuit): Stay closes it, Leave hands over to main.ts
+  let onLeave: (() => void) | null = null;
+  $('quitModal').addEventListener('click', (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLElement>('[data-quit]');
+    if (!b) return;
+    setOpen('quitModal', false);
+    navSync();
+    const leave = onLeave;
+    onLeave = null;
+    if (b.dataset.quit === 'leave') leave?.();
+  });
+  // every board's close stud (the × on its corner)
+  document.addEventListener('click', (e) => {
+    const board = (e.target as HTMLElement).closest('[data-close]')?.closest('.board');
+    if (!board) return;
+    if (board.id === 'chestPanel') closeChestPanel();
+    else setOpen(board.id, false);
+    navSync();
+  });
   // The choice outline shows only while the keyboard is in use; the pointer hides it again.
   document.addEventListener('keydown', () => document.body.classList.add('kb-nav'), true);
   document.addEventListener('pointerdown', () => document.body.classList.remove('kb-nav'), true);
@@ -313,9 +396,16 @@ export function initUI(
     closeChest: closeChestPanel,
     isChestOpen: () => chestOpenI >= 0,
     handleKey,
+    /** Ask before leaving the world; `leave` runs only if the player picks Leave. */
+    confirmQuit(leave: () => void) {
+      onLeave = leave;
+      delete navKeys.quitModal;   // the keyboard choice always starts on Stay
+      setOpen('quitModal', true);
+      navSync();
+    },
     /** Close every window and drop any pending placement (quitting to the menu). */
     closeAll() {
-      for (const id of ['invModal', 'helpModal', 'controlsModal']) setOpen(id, false);
+      for (const id of ['invModal', 'helpModal', 'controlsModal', 'quitModal']) setOpen(id, false);
       closeChestPanel();
       clearSelection();
       navSync();
@@ -349,46 +439,53 @@ export function initUI(
       (st.engineHp != null ? `<br>💠 <b style="color:${st.engineHp > 60 ? '#6dd6c8' : st.engineHp > 30 ? '#ffd97a' : '#ff6a6a'}">Engine: ${st.engineHp}/120 HP</b>` : '') +
       (st.won ? '<br>✨ <b style="color:#6dd6c8">THE BLIGHT IS PURGED — VICTORY</b>' : '');
 
-    let obj = '';
-    if (st.won) obj = 'The Hearth is saved. Explore freely.';
-    else if (st.waveSecs > 0) obj = 'Defend the World Engine from the Blight waves!';
-    else if (!st.structCount('workbench')) obj = `Gather wood (${keyLabel('interact')} on trees) → craft & place a Workbench [${keyLabel('craft')}]`;
-    else if (!st.tools.has('axe')) obj = 'Craft a Wooden Axe at the Workbench (fiber from bushes)';
-    else if (!st.structCount('campfire')) obj = 'Place a Campfire — heals you, cooks food, shields buildings from Blight Storms';
-    else if (!st.tools.has('pick')) obj = 'Craft a Wooden Pickaxe (loose stones lie on the ground)';
-    else if (!st.tools.has('spick')) obj = 'Craft a Stone Pickaxe to mine boulders & crystal';
-    else if (!st.gear.has('heatcloak') || !st.gear.has('furcloak')) obj = 'Craft Heat & Fur Cloaks to survive the Dunes and the Spire, then WEAR the right cloak (click it in the Bag)';
-    else if (!st.structCount('forge')) obj = 'Mine Crystal in the Frozen Spire → build the Aether Forge';
-    else if (st.mono.filter(Boolean).length < 4) obj = `Forge Monolith Cores (crystal + essence) and awaken all 4 Monoliths (${st.mono.filter(Boolean).length}/4)`;
-    else obj = 'Build the World Engine at the Core Void center — then survive the final assault!';
-    $('objective').innerHTML = `🎯 ${obj}<br><span style="color:#9ab">Hunt animals 🥩, drink at lakes (${keyLabel('interact')}) 💧, cook at campfires</span>`;
-
     // inventory (modal) + quickbar — rebuild only when contents change
     // Task 4: add wornGear + selectedVehicle to signature
     const sig = JSON.stringify([st.inv, [...st.tools], [...st.gear], selected, st.equipped, st.wornGear, st.armorOn, st.selectedVehicle, st.inWater, st.zone]);
     if (sig !== invSig) {
       invSig = sig;
-      let html = RESOURCES.map((r) => `<span class="slot">${icon(r)} ${st.inv[r] || 0}</span>`).join('');
+      // the bag: one grid of sockets per kind of thing, each socket its icon, name, count
+      // and what clicking it does
+      const tile = (k: string, cls: string, attrs: string, count: number | null, act = '') =>
+        `<span class="slot ${cls}" ${attrs}><span class="ic">${icon(k)}</span><span class="nm">${NAMES[k] || k}</span>` +
+        (count != null ? `<span class="ct">${count}</span>` : '') + (act ? `<span class="act">${act}</span>` : '') + '</span>';
+      const section = (title: string, tiles: string) =>
+        tiles ? `<div class="board-group">${title}</div><div class="inv-grid">${tiles}</div>` : '';
+      const food = EAT_ORDER.find((k) => st.inv[k]);
+      const useAct: Record<string, string> = {
+        water: `Drink [${keyLabel('drink')}]`, medicine: `Take [${keyLabel('medicine')}]`,
+        cookedmeat: 'Eat', bread: 'Eat', glowcap: 'Eat',
+      };
+      if (food) useAct[food] = `Eat [${keyLabel('eat')}]`;
+      let tiles = RESOURCES.map((r) => tile(r, st.inv[r] ? '' : 'empty', '', st.inv[r] || 0)).join('');
+      let html = section('Resources', tiles);
+      tiles = '';
       for (const k of ['water', 'meat', 'cookedmeat', 'grain', 'glowcap', 'bread', 'medicine'])
-        if (st.inv[k]) {
-          const useable = ['water', 'cookedmeat', 'glowcap', 'bread', 'medicine'].includes(k);
-          html += `<span class="slot ${useable ? 'use' : ''}" ${useable ? `data-use="${k}"` : ''}>${icon(k)} ${NAMES[k] || k} ×${st.inv[k]}${useable ? ' (click)' : ''}</span>`;
-        }
-      // building materials — crafted intermediates, shown as a plain count row
-      // (driven by MATERIALS so a new material never needs a UI edit)
-      for (const k of MATERIALS)
-        if (st.inv[k]) html += `<span class="slot">${icon(k)} ${NAMES[k] || k} ×${st.inv[k]}</span>`;
+        if (st.inv[k]) tiles += useAct[k] ? tile(k, 'use', `data-use="${k}"`, st.inv[k], useAct[k]) : tile(k, '', '', st.inv[k]);
+      html += section('Food & drink', tiles);
+      // tools and wearables: equip / wear with a click
+      tiles = HOTBAR.filter((t) => st.tools.has(t)).map((t) =>
+        tile(t, `tool ${st.equipped === t ? 'eq' : ''}`, `data-eq="${t}"`, null, st.equipped === t ? '✓ In hand' : `Equip [${hotKey(t)}]`)).join('');
+      // data-wear="" means null (unequip), data-wear="key" means equip
+      tiles += [...st.gear].map((t) =>
+        tile(t, `tool ${isWorn(st, t) ? 'eq' : ''}`, `data-wear="${t}"`, null, isWorn(st, t) ? '✓ Worn' : 'Wear')).join('');
       for (const k of ['boat', 'sboat', 'torch']) {
         if (!st.inv[k]) continue;
-        if (k === 'boat' || k === 'sboat') {
+        if (k === 'torch') tiles += tile(k, '', '', st.inv[k], `In mines [${keyLabel('torch')}]`);
+        else if (st.inWater) tiles += tile(k, 'off', '', st.inv[k], 'Reach land');
+        else {
           const sel = st.selectedVehicle === k;
-          html += st.inWater
-            ? `<span class="slot" style="opacity:0.45">${icon(k)} ${NAMES[k]} ×${st.inv[k]} (reach land)</span>`
-            : `<span class="slot tool ${sel ? 'sel' : ''}" data-veh="${k}" style="cursor:pointer">${icon(k)} ${NAMES[k]} ×${st.inv[k]}${sel ? ' ⛵ selected' : ' (select)'}</span>`;
-        } else {
-          html += `<span class="slot">${icon(k)} ${NAMES[k]} ×${st.inv[k]}${k === 'torch' ? ` [${keyLabel('torch')}]` : ''}</span>`;
+          tiles += tile(k, `tool ${sel ? 'sel' : ''}`, `data-veh="${k}"`, st.inv[k], sel ? '⛵ Selected' : 'Select');
         }
       }
+      html += section('Tools & gear', tiles);
+      // building materials — crafted intermediates, shown as a plain count
+      // (driven by MATERIALS so a new material never needs a UI edit)
+      tiles = '';
+      for (const k of MATERIALS)
+        if (st.inv[k]) tiles += tile(k, '', '', st.inv[k]);
+      html += section('Building materials', tiles);
+      tiles = '';
       for (const k of ['wall', 'campfire', 'workbench', 'forge', 'mineshaft', 'chest', 'bed', 'core', 'engine',
                         'banner', 'stone_path', 'lantern', 'reed_vase', 'rug', 'trophy_antler', 'fence', 'farmplot']) {
         if (!st.inv[k]) continue;
@@ -401,20 +498,15 @@ export function initUI(
           if (st.zone === 'in' && !interiorOk) continue;
           if (st.zone === 'out' && r.zone === 'in') continue;
         }
-        html += `<span class="slot place ${selected === k ? 'sel' : ''}" data-k="${k}">${icon(k)} ${NAMES[k] || k} ×${st.inv[k]}${r?.place ? ' 🔨' : ''}</span>`;
+        tiles += tile(k, `place ${selected === k ? 'sel' : ''}`, `data-k="${k}"`, st.inv[k],
+          r?.place ? (selected === k ? '🔨 Placing' : '🔨 Place') : '');
       }
-      html += HOTBAR.filter((t) => st.tools.has(t)).map((t) =>
-        `<span class="slot tool ${st.equipped === t ? 'eq' : ''}" data-eq="${t}">[${hotKey(t)}] ${icon(t)} ${NAMES[t]}${st.equipped === t ? ' ✓' : ''}</span>`).join('');
-      // Task 4: gear slots are clickable to wear/unwear
-      html += [...st.gear].map((t) =>
-        `<span class="slot tool ${isWorn(st, t) ? 'eq' : ''}" data-wear="${t}">${icon(t)} ${NAMES[t]} ${isWorn(st, t) ? '✓ worn' : '(wear)'}</span>`
-      ).join('');
+      html += section('To place', tiles);
       $('inv').innerHTML = html;
       // quickbar: equipped tools + quick consumables + owned cloaks
       let qb = HOTBAR.filter((t) => st.tools.has(t)).map((t) =>
         `<span class="slot tool ${st.equipped === t ? 'eq' : ''}" data-eq="${t}">${hotKey(t)} ${icon(t)}</span>`).join('');
       // each quick slot wears the key that uses it: drink, the food eat would pick, medicine, cloak / armor
-      const food = EAT_ORDER.find((k) => st.inv[k]);
       for (const k of ['water', 'cookedmeat', 'bread', 'glowcap', 'medicine'])
         if (st.inv[k]) {
           const key = k === 'water' ? kb('drink') : k === 'medicine' ? kb('medicine') : k === food ? kb('eat') : '';
@@ -435,19 +527,18 @@ export function initUI(
       if (cSig !== chestSig) {
         chestSig = cSig;
         const CHEST_RES = ['wood','stone','fiber','crystal','essence','iron','diamond','starmetal'] as const;
-        let cHtml = `<b>📦 Chest Storage</b> <span style="color:#888;font-size:11px">(ESC closes · choose a button and press ${keyLabel('uiConfirm')})</span><br><br>`;
-        cHtml += '<table style="width:100%;border-collapse:collapse">';
-        cHtml += '<tr style="color:#aaa;font-size:11px"><th style="text-align:left">Resource</th><th>In Chest</th><th>In Bag</th><th></th></tr>';
+        // − takes out of the chest, + puts in from the bag
+        let cHtml = '<table class="chest-table"><tr><th>Resource</th><th>In chest</th><th>In bag</th><th></th></tr>';
         for (const r of CHEST_RES) {
           const inChest = chestSlots[r] || 0;
           const inBag = st.inv[r] || 0;
-          cHtml += `<tr><td>${icon(r)} ${NAMES[r] || r}</td><td style="text-align:center">${inChest}</td><td style="text-align:center">${inBag}</td>` +
-            `<td style="display:flex;gap:3px;padding:2px 0">` +
-            `<button data-res="${r}" data-n="-10" style="font-size:11px;padding:1px 4px" ${inChest === 0 ? 'disabled' : ''}>−10</button>` +
-            `<button data-res="${r}" data-n="-1"  style="font-size:11px;padding:1px 4px" ${inChest === 0 ? 'disabled' : ''}>−</button>` +
-            `<button data-res="${r}" data-n="1"   style="font-size:11px;padding:1px 4px" ${inBag === 0 ? 'disabled' : ''}>+</button>` +
-            `<button data-res="${r}" data-n="10"  style="font-size:11px;padding:1px 4px" ${inBag === 0 ? 'disabled' : ''}>+10</button>` +
-            `</td></tr>`;
+          cHtml += `<tr><td>${icon(r)} ${NAMES[r] || r}</td><td class="n">${inChest}</td><td class="n">${inBag}</td>` +
+            `<td><div class="mv">` +
+            `<button data-res="${r}" data-n="-10" title="Take 10" ${inChest === 0 ? 'disabled' : ''}>−10</button>` +
+            `<button data-res="${r}" data-n="-1" title="Take 1" ${inChest === 0 ? 'disabled' : ''}>−</button>` +
+            `<button data-res="${r}" data-n="1" title="Store 1" ${inBag === 0 ? 'disabled' : ''}>+</button>` +
+            `<button data-res="${r}" data-n="10" title="Store 10" ${inBag === 0 ? 'disabled' : ''}>+10</button>` +
+            `</div></td></tr>`;
         }
         cHtml += '</table>';
         $('chestPanel').querySelector('.chest-body')!.innerHTML = cHtml;
@@ -460,17 +551,16 @@ export function initUI(
     medicOffer = st.medicOffer;
     const medicEl = $('medicPanel');
     if (medicOffer) {
-      medicEl.style.display = 'block';
+      medicEl.style.display = 'flex';
       const canPay = (st.inv[medicOffer.resource] || 0) >= medicOffer.amount;
       const msig = `${medicOffer.medicId}:${medicOffer.offerId}:${canPay}`;
       if (msig !== medicSig) {
         medicSig = msig;
-        medicEl.innerHTML =
-          `<b>🩺 A medic's offer</b><br>` +
-          `Full healing for ${icon(medicOffer.resource)} ${medicOffer.amount} ${NAMES[medicOffer.resource] || medicOffer.resource}<br>` +
-          `<span id="medicCountdown" style="color:#9ab;font-size:12px"></span><br><br>` +
-          `<button data-medic-accept ${canPay ? '' : 'disabled'}>Accept [${keyLabel('medicAccept')}]</button> ` +
-          `<button data-medic-decline>Decline [${keyLabel('medicDecline')}]</button>`;
+        body('medicPanel').innerHTML =
+          `<p class="medic-offer">Full healing for <b>${icon(medicOffer.resource)} ${medicOffer.amount} ${NAMES[medicOffer.resource] || medicOffer.resource}</b></p>` +
+          `<p class="medic-time" id="medicCountdown"></p>` +
+          `<div class="medic-acts"><button class="primary" data-medic-accept ${canPay ? '' : 'disabled'}>Accept [${keyLabel('medicAccept')}]</button>` +
+          `<button data-medic-decline>Decline [${keyLabel('medicDecline')}]</button></div>`;
       }
       const secsLeft = Math.max(0, Math.ceil((medicOffer.expiresAt - Date.now()) / 1000));
       const cdEl = document.getElementById('medicCountdown');
@@ -481,34 +571,38 @@ export function initUI(
     }
 
     // craft panel — rebuild only when relevant state changes
-    if ($('craftPanel').style.display === 'block') {
+    if (isOpen('craftPanel')) {
       const psig = JSON.stringify([st.inv, [...st.tools], [...st.gear], st.nearWorkbench, st.nearForge, st.nearCampfire]);
       if (psig !== panelSig) {
         panelSig = psig;
-        let html = `<b>Crafting</b> <span style="color:#888">(${keyLabel('craft')} to close)</span><br>`;
+        // grouped by the station each recipe needs ('' = by hand), in recipe order; the
+        // group's heading says whether you are standing near that station
+        const near = (s: string) => s === 'workbench' ? st.nearWorkbench : s === 'forge' ? st.nearForge : st.nearCampfire;
+        const groups = new Map<string, string>();
         for (const [key, r] of Object.entries(RECIPES) as [string, any][]) {
           if (r.tool && st.tools.has(key)) continue;
           if (r.gear && st.gear.has(key)) continue;
-          const stationOk = !r.station ||
-            (r.station === 'workbench' ? st.nearWorkbench : r.station === 'forge' ? st.nearForge : st.nearCampfire);
-          const ok = canAfford(st.inv, r.cost) && stationOk;
+          const s = r.station || '';
+          const ok = canAfford(st.inv, r.cost) && (!s || near(s));
           const cost = Object.entries(r.cost).map(([k, v]) => `${icon(k)}${v}`).join(' ');
-          html += `<div class="recipe"><button data-r="${key}" ${ok ? '' : 'disabled'}>${NAMES[key] || key}</button>` +
-            ` <span class="cost">${cost}</span>` +
-            (r.station && !stationOk ? ` <span class="need">near ${NAMES[r.station]}</span>` : '') + `</div>`;
+          groups.set(s, (groups.get(s) || '') +
+            `<div class="recipe"><button data-r="${key}" ${ok ? '' : 'disabled'}>${NAMES[key] || key}</button><span class="cost">${cost}</span></div>`);
         }
-        $('craftPanel').innerHTML = html;
+        let html = '';
+        for (const [s, rows] of groups)
+          html += `<div class="board-group">${s ? `${icon(s)} ${NAMES[s] || s}` : '✋ By hand'}` +
+            (s ? `<span class="tag ${near(s) ? '' : 'off'}">${near(s) ? 'nearby' : 'not nearby'}</span>` : '') + `</div>${rows}`;
+        body('craftPanel').innerHTML = html;
       }
     }
 
     // build panel — modular pieces, grouped by the slot they occupy. Costs are
     // paid in crafted materials, so affordability reads the same inventory.
-    if ($('buildPanel').style.display === 'block') {
+    if (isOpen('buildPanel')) {
       const bsig = JSON.stringify([st.inv, selectedMod, st.zone]);
       if (bsig !== buildSig) {
         buildSig = bsig;
-        let html = `<b>Building</b> <span style="color:#888">(${keyLabel('build')} to close · then ${keyLabel('place')} places in front)</span><br>` +
-          '<span style="color:#8ab;font-size:11px">Paid for in crafted materials</span>';
+        let html = '';
         const order = ['floor', 'wall', 'fixture', 'decor'];
         const label: Record<string, string> = {
           floor: 'Floors', wall: 'Walls & openings', fixture: 'Fixtures', decor: 'Decor',
@@ -517,16 +611,16 @@ export function initUI(
           const kinds = Object.entries(MODULES as any)
             .filter(([, d]) => (d as any).slot === group);
           if (!kinds.length) continue;
-          html += `<div class="slotgroup">${label[group]}</div>`;
+          html += `<div class="board-group">${label[group]}</div>`;
           for (const [key, d] of kinds as [string, any][]) {
             const ok = canAfford(st.inv, d.cost);
             const cost = Object.entries(d.cost).map(([k, v]) => `${icon(k)}${v}`).join(' ');
             html += `<div class="recipe"><button data-mod="${key}" class="${selectedMod === key ? 'sel' : ''}" ${ok ? '' : 'disabled'}>` +
-              `${NAMES[key] || key}</button> <span class="cost">${cost}</span>` +
-              (selectedMod === key ? ' <span style="color:#8f8">placing</span>' : '') + '</div>';
+              `${NAMES[key] || key}</button><span class="cost">${cost}</span>` +
+              (selectedMod === key ? '<span class="placing">placing</span>' : '') + '</div>';
           }
         }
-        $('buildPanel').innerHTML = html;
+        body('buildPanel').innerHTML = html;
       }
     }
     navSync();   // a panel redrawn above gets its keyboard choice back

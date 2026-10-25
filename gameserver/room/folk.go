@@ -310,6 +310,18 @@ func (r *Room) campFire(x, y int) bool {
 	return false
 }
 
+// villageFireNear: a village fire burns within radius of (x, y). A village fire
+// is a campfire like any a keeper builds: it heals, warms off a blizzard, cooks
+// and keeps fire-shy creatures back at night (nearStruct, campfires).
+func (r *Room) villageFireNear(x, y, radius float64) bool {
+	for i := range r.camps {
+		if math.Hypot(float64(r.camps[i].FireX)-x, float64(r.camps[i].FireY)-y) <= radius {
+			return true
+		}
+	}
+	return false
+}
+
 // folkThreatened: some creature is within rad of f.
 func (r *Room) folkThreatened(f *Folk, rad float64) bool {
 	return r.creatureNear(f.X, f.Y, rad)

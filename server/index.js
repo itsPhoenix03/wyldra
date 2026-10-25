@@ -55,6 +55,99 @@ let nextCre = 1, nextAni = 1, time = 0.3, day = 1, won = false, tickN = 0;
 let wave = null;                     // {until, engineI}
 const profiles = {};                 // persistent player data keyed by browser token
 
+// --- mines: tunnels that touch edge-on are one mine, whoever dug them ---
+// A union-find over digs (gameserver/room/mines.go) tells when a new entrance opens into a mine that is already
+// there and when a dig breaks through into another. Digs are never filled back in, so mines only ever merge.
+const mineParent = new Map();
+const ORTHO = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+function mineRoot(i) {
+  for (;;) {
+    const p = mineParent.get(i);
+    if (p === undefined || p === i) return i;
+    const gp = mineParent.get(p);
+    if (gp !== undefined) mineParent.set(i, gp);   // path halving
+    i = p;
+  }
+}
+// Digs tile i out and links it to every carved tile it touches edge-on. Returns how many separate mines it
+// touched: 0 a new pocket, 1 extends a mine, 2+ just joined them into one. Every digs.add goes through here.
+function carve(i) {
+  if (digs.has(i)) return 0;
+  digs.add(i); mineParent.set(i, i);
+  const x = i % SIZE, y = (i / SIZE) | 0;
+  let touched = 0;
+  for (const [dx, dy] of ORTHO) {
+    const nx = x + dx, ny = y + dy;
+    if (nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE || !digs.has(ny * SIZE + nx)) continue;
+    const a = mineRoot(i), b = mineRoot(ny * SIZE + nx);
+    if (a !== b) { mineParent.set(b, a); touched++; }
+  }
+  return touched;
+}
+// Carves what a new entrance at (x, y) needs: nothing over a tunnel (the keeper climbs into that mine), only the
+// shaft beside one (plus a bridge when it touches only at a corner) so no chamber is scraped out of it, and the
+// 3x3 starting chamber on fresh rock. Returns the opened tiles and how many existing mines it now leads into.
+function openShaft(x, y) {
+  const at = (dx, dy) => {
+    const nx = x + dx, ny = y + dy;
+    return nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE ? -1 : ny * SIZE + nx;
+  };
+  const shaft = at(0, 0), opened = [];
+  if (digs.has(shaft)) return { opened, mines: 1 };
+  const before = new Set();
+  let near = false;
+  for (let dy = -2; dy <= 2; dy++)
+    for (let dx = -2; dx <= 2; dx++) {
+      const di = at(dx, dy);
+      if (di < 0 || !digs.has(di)) continue;
+      before.add(mineRoot(di));
+      if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) near = true;
+    }
+  const dig = (di) => { carve(di); opened.push(di); };
+  if (!near) {
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        const di = at(dx, dy);
+        if (di >= 0 && DIGGABLE(world, di) && !digs.has(di)) dig(di);
+      }
+  } else if (carve(shaft) > 0) opened.push(shaft);
+  else {
+    opened.push(shaft);
+    // only a corner touches: carve the edge-on tile between the shaft and that corner so the way in is walkable
+    corners: for (const [cx, cy] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+      const ci = at(cx, cy);
+      if (ci < 0 || !digs.has(ci)) continue;
+      for (const [bx, by] of [[cx, 0], [0, cy]]) {
+        const bi = at(bx, by);
+        if (bi >= 0 && DIGGABLE(world, bi)) { dig(bi); break corners; }
+      }
+    }
+  }
+  const root = mineRoot(shaft);
+  let mines = 0;
+  for (const b of before) if (mineRoot(b) === root) mines++;
+  return { opened: opened.sort((a, b) => a - b), mines };
+}
+// Sets a torch beside a new entrance's ladder so the light down there has a source: the first carved tile in this
+// order (the ones behind the ladder on screen first), else the shaft. A mine already lit around the shaft gets none.
+const SHAFT_TORCH = [[0, -1], [-1, 0], [-1, -1], [1, 0], [0, 1], [1, -1], [-1, 1], [1, 1]];
+function lightShaft(x, y) {
+  const at = (dx, dy) => {
+    const nx = x + dx, ny = y + dy;
+    return nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE ? -1 : ny * SIZE + nx;
+  };
+  for (let dy = -1; dy <= 1; dy++)
+    for (let dx = -1; dx <= 1; dx++) if (torches.has(at(dx, dy))) return -1;
+  let spot = at(0, 0);
+  for (const [dx, dy] of SHAFT_TORCH) {
+    const t = at(dx, dy);
+    if (t >= 0 && digs.has(t)) { spot = t; break; }
+  }
+  if (!digs.has(spot)) return -1;
+  torches.add(spot);
+  return spot;
+}
+
 // --- persistence: JSON snapshot on disk (swap for a real DB later) ---
 const SAVE_PATH = 'server/save.json';
 function loadSave() {
@@ -88,7 +181,7 @@ function loadSave() {
       if (!RECIPES[st.kind] && !STRUCT_HP[st.kind]) continue;  // unknown kind guard
       structures.set(i, st);
     }
-    s.digs.forEach((i) => digs.add(i));
+    s.digs.forEach((i) => carve(i));
     s.torches.forEach((i) => torches.add(i));
     for (const [i, f] of s.furn || []) furn.set(i, f);
     (s.brokenBergs || []).forEach((i) => brokenBergs.add(i));
@@ -113,6 +206,8 @@ function saveGame() {
 }
 const snapshot = (p) => ({ inv: p.inv, tools: [...p.tools], gear: [...p.gear], wornGear: p.wornGear || null, hp: p.hp, hunger: p.hunger, thirst: p.thirst, x: p.x, y: p.y, name: p.name || 'Keeper' });
 loadSave();
+// every standing entrance gets its torch: ones built before they came with one get it now
+for (const [i, s] of structures) if (s.kind === 'mineshaft') lightShaft(i % SIZE, (i / SIZE) | 0);
 setInterval(saveGame, 30000);
 process.on('SIGINT', () => { saveGame(); console.log('\n[hearth] saved. bye'); process.exit(0); });
 
@@ -438,7 +533,7 @@ wss.on('connection', (ws) => {
       // fix: derive pick vs spick from the tool actually validated above — never trust a client claim
       const tool = p.tools.has('spick') ? 'spick' : 'pick';
       bcast({ t: 'act', id, seq, a: 'mine', tool, dx: clampDir(m.dx), dy: clampDir(m.dy), targetI: i });
-      digs.add(i);
+      const brokeThrough = carve(i) > 1;
       const v = world.veins[i];
       let got = '';
       if (v === 1) { const n = 2 + (Math.random() < 0.5 ? 1 : 0); p.inv.iron += n; got = `+${n} Iron!`; }
@@ -447,6 +542,7 @@ wss.on('connection', (ws) => {
       bcast({ t: 'dig', tiles: [i], by: id, seq });
       sendInv(id, p);
       if (got) send(ws, { t: 'msg', s: got });
+      if (brokeThrough) send(ws, { t: 'msg', s: '⛏ You broke through into another mine!' });
     }
 
     else if (m.t === 'anim') {
@@ -579,14 +675,13 @@ wss.on('connection', (ws) => {
         wave = { until: Date.now() + 4 * 60 * 1000, engineI: i };
         bcast({ t: 'wave', secs: 240 });
       }
-      if (kind === 'mineshaft') {     // carve the starting chamber below the entrance
-        const opened = [];
-        for (let dy = -1; dy <= 1; dy++)
-          for (let dx = -1; dx <= 1; dx++) {
-            const di = ti(x + dx, y + dy);
-            if (DIGGABLE(world, di) && !digs.has(di)) { digs.add(di); opened.push(di); }
-          }
+      if (kind === 'mineshaft') {     // a starting chamber on fresh rock, or just an opening into the mine below
+        const { opened, mines } = openShaft(x, y);
         if (opened.length) bcast({ t: 'dig', tiles: opened });
+        const torch = lightShaft(x, y);
+        if (torch >= 0) bcast({ t: 'torch', i: torch });
+        if (mines === 1) send(ws, { t: 'msg', s: 'Your entrance opens into an existing mine.' });
+        else if (mines > 1) send(ws, { t: 'msg', s: 'Your entrance joins the mines below into one.' });
       }
     }
 

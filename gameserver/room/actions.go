@@ -297,20 +297,20 @@ func (r *Room) handleBuild(p *Player, m map[string]any) {
 		r.broadcast(map[string]any{"t": "wave", "secs": 240})
 	}
 	if kind == "mineshaft" {
-		// carve the starting chamber below the entrance
-		var opened []int
-		for dy := -1; dy <= 1; dy++ {
-			for dx := -1; dx <= 1; dx++ {
-				di := ti(x+float64(dx), y+float64(dy))
-				if r.diggable(di) && !r.digs[di] {
-					r.digs[di] = true
-					opened = append(opened, di)
-				}
-			}
-		}
+		// carve the way down: a starting chamber on fresh rock, or just an
+		// opening into the mine that is already below (mines.go)
+		opened, mines := r.openShaft(int(x), int(y))
 		if len(opened) > 0 {
-			sort.Ints(opened)
 			r.broadcast(map[string]any{"t": "dig", "tiles": opened})
+		}
+		if t := r.lightShaft(int(x), int(y)); t >= 0 {
+			r.broadcast(map[string]any{"t": "torch", "i": t})
+		}
+		switch {
+		case mines == 1:
+			r.send(p, map[string]any{"t": "msg", "s": "Your entrance opens into an existing mine."})
+		case mines > 1:
+			r.send(p, map[string]any{"t": "msg", "s": "Your entrance joins the mines below into one."})
 		}
 	}
 }
@@ -372,7 +372,7 @@ func (r *Room) handleDig(p *Player, m map[string]any) {
 		"t": "act", "id": p.S.ID, "seq": seq, "a": "mine", "tool": tool,
 		"dx": clampDir(m, "dx"), "dy": clampDir(m, "dy"), "targetI": i,
 	})
-	r.digs[i] = true
+	brokeThrough := r.carve(i) > 1
 	got := ""
 	switch r.world.Veins[i] {
 	case 1:
@@ -399,6 +399,9 @@ func (r *Room) handleDig(p *Player, m map[string]any) {
 	r.sendInv(p)
 	if got != "" {
 		r.send(p, map[string]any{"t": "msg", "s": got})
+	}
+	if brokeThrough {
+		r.send(p, map[string]any{"t": "msg", "s": "⛏ You broke through into another mine!"})
 	}
 }
 
