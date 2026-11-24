@@ -263,6 +263,12 @@ try {
     const rLan = await post(`http://${lanIp}:${PORT3}`, '/api/join', { name: 'LanPlayer', dev: true, tok: 'test-lan-' + Math.random().toString(36).slice(2) });
     if (rLan.status !== 200) fail('devall: LAN join failed with ' + rLan.status);
     if ('dev' in payloadOf(rLan.body.ticket)) fail('devall: a non-loopback client got the dev claim (body.dev honored under HEARTH_DEV_ALL)!');
+    // A remote browser can't reach the game at "localhost" (that's its own machine):
+    // it gets the address it used to reach the control plane, port kept.
+    if (rLan.body.ws !== `ws://${lanIp}:8082`) fail('remote: join handed a LAN client ' + rLan.body.ws);
+    const wlLan = await (await fetch(`http://${lanIp}:${PORT2}/api/worlds`)).json();
+    if (wlLan.worlds.map((w) => w.ws).join() !== `ws://${lanIp}:8082,ws://${lanIp}:8083`) fail('remote: world list handed a LAN client ' + JSON.stringify(wlLan.worlds));
+    console.log(`remote OK: a client at ${lanIp} is sent to ws://${lanIp}:8082, not localhost`);
     // ...and a spoofed forwarding header must not change that: headers are client-written.
     const rSpoof = await fetch(`http://${lanIp}:${PORT3}/api/join`, {
       method: 'POST',

@@ -34,9 +34,12 @@ string and add `?sslmode=require` (or `verify-full`).
 | `HEARTH_NO_PERSIST` | hearthd | Wins over both of the above. Nothing is saved, so no database is needed. |
 | `HEARTH_TEST_DATABASE_URL` | `go test` | Turns on the Postgres tests. Without it they skip. |
 
-`.env.example` at the repo root lists them. Copy it to `.env`, which is gitignored. Nothing loads
-`.env` automatically, so export the variables in your shell or service manager. Logs never print
-the URL: hearthd logs `host:port/db` only.
+`.env.example` at the repo root lists them. Copy it to `.env`, which is gitignored. `npm start`
+and `npm run start:dev` load it (`tools/dev/stack.mjs`; variables already set in the shell win) and
+print where saves go. The wire-test stack (`--no-client`) ignores `.env`, so `npm run test:go`
+never writes into a real database. Anything else, such as a bare `go run ./cmd/hearthd` or a
+service manager, needs the variables exported itself. Logs never print the URL: hearthd logs
+`host:port/db` only.
 
 ## 3. Apply the schema
 

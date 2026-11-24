@@ -11,9 +11,15 @@
 //   node tools/dev/stack.mjs --dev      ...with the tester panels and warp enabled
 //   node tools/dev/stack.mjs --no-client   servers only (for test-go.mjs)
 //   node tools/dev/stack.mjs --legacy   the pre-migration Node server on :8081
+//   node tools/dev/stack.mjs --open-ports   also open the ports to your Tailscale
+//                                           network until the stack stops (Windows)
+//
+// The repo-root .env (gitignored; see .env.example) is loaded for every mode but
+// --no-client, so HEARTH_STORE=postgres + DATABASE_URL there switch the game to
+// Postgres. Variables already set in the shell win over the file.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
@@ -22,6 +28,7 @@ const args = new Set(process.argv.slice(2));
 const dev = args.has('--dev');
 const legacy = args.has('--legacy');
 const withClient = !args.has('--no-client');
+const openPorts = args.has('--open-ports');
 
 // gameserver/test-go.mjs mints its own tickets (it needs both a dev-claimed and
 // an unclaimed one, which no single control-plane policy can produce), so it
@@ -40,12 +47,53 @@ function testTicketKeys() {
   return { HEARTH_TICKET_PUBKEY, HEARTH_TICKET_PRIVKEY };
 }
 
+// .env: KEY=VALUE lines, # comments, optional `export ` and surrounding quotes.
+// Node 18 has no built-in loader (process.loadEnvFile is 20.12+). The wire
+// suites (--no-client) skip it: they build and dig in the world they run
+// against, and that must never be the real database.
+function loadDotEnv() {
+  const file = resolve(ROOT, '.env');
+  if (!withClient || !existsSync(file)) return {};
+  const out = {};
+  for (const raw of readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const m = raw.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (!m) continue;
+    const v = m[2].match(/^(["'])(.*)\1$/);
+    out[m[1]] = v ? v[2] : m[2];
+  }
+  return out;
+}
+const dotEnv = loadDotEnv();
+for (const [k, v] of Object.entries(dotEnv)) if (process.env[k] === undefined) process.env[k] = v;
+
+// Where the game saves, for the banner. Never print DATABASE_URL whole: it
+// carries the password.
+function storeLabel() {
+  if (legacy) return 'server/save.json';
+  if (process.env.HEARTH_NO_PERSIST) return 'none (HEARTH_NO_PERSIST)';
+  if ((process.env.HEARTH_STORE || '').trim().toLowerCase() !== 'postgres') return 'json (gameserver/world.<id>.save.json)';
+  const at = (process.env.DATABASE_URL || '').split('@').pop().split('?')[0];
+  return `postgres ${at || '(DATABASE_URL missing!)'}`;
+}
+
 // ANSI colours keep three interleaved streams readable; harmless if unsupported.
-const COLOURS = { control: '\x1b[36m', game: '\x1b[32m', client: '\x1b[35m', legacy: '\x1b[33m' };
+const COLOURS = { control: '\x1b[36m', game: '\x1b[32m', client: '\x1b[35m', legacy: '\x1b[33m', ports: '\x1b[34m' };
 const RESET = '\x1b[0m';
+const tagFor = (name) => `${COLOURS[name] || ''}[${name}]${RESET} `;
+
+function pipeLines(stream, tag) {
+  let buf = '';
+  stream.on('data', (d) => {
+    buf += d.toString();
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    for (const l of lines) if (l.trim()) process.stdout.write(tag + l + '\n');
+  });
+}
 
 const children = [];
 let shuttingDown = false;
+let portsProc = null;
 
 function run(name, cmd, cmdArgs, opts = {}) {
   const child = spawn(cmd, cmdArgs, {
@@ -54,18 +102,9 @@ function run(name, cmd, cmdArgs, opts = {}) {
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: process.platform === 'win32',   // resolves go.exe / npx.cmd from PATH
   });
-  const tag = `${COLOURS[name] || ''}[${name}]${RESET} `;
-  const pipe = (stream) => {
-    let buf = '';
-    stream.on('data', (d) => {
-      buf += d.toString();
-      const lines = buf.split('\n');
-      buf = lines.pop();
-      for (const l of lines) if (l.trim()) process.stdout.write(tag + l + '\n');
-    });
-  };
-  pipe(child.stdout);
-  pipe(child.stderr);
+  const tag = tagFor(name);
+  pipeLines(child.stdout, tag);
+  pipeLines(child.stderr, tag);
   child.on('exit', (code) => {
     if (shuttingDown) return;
     process.stdout.write(tag + `exited with code ${code}\n`);
@@ -78,6 +117,9 @@ function run(name, cmd, cmdArgs, opts = {}) {
 function shutdown(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
+  // Only the waiter that reports the rule going up; the elevated helper it started
+  // watches this process and closes the ports once we have exited.
+  if (portsProc && portsProc.exitCode === null) portsProc.kill();
   for (const c of children) {
     if (c.exitCode !== null) continue;
     // On Windows, killing the shell wrapper leaves the real process orphaned.
@@ -126,11 +168,37 @@ if (withClient) {
   else run('client', 'npx', ['vite', '--host']);
 }
 
+// --open-ports: Windows Firewall keeps other machines out by default.
+// tools/dev/firewall.ps1 asks for admin once (UAC), opens exactly the ports this
+// stack listens on, and leaves an elevated helper waiting on OUR pid to close them.
+// It does not rely on shutdown() running, so a crash or a closed terminal closes
+// them too. A failure here leaves the stack running for this machine only.
+if (openPorts && !shuttingDown) {
+  if (process.platform !== 'win32') {
+    process.stdout.write(tagFor('ports') + '--open-ports only manages Windows Firewall; nothing to do here\n');
+  } else {
+    const ports = [
+      ...(withClient ? [5173] : []),
+      ...(legacy ? [8081] : [Number(process.env.CONTROL_PORT) || 8090, Number(process.env.HEARTH_GAME_PORT) || 8082]),
+    ];
+    portsProc = spawn('powershell.exe', [
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', resolve(ROOT, 'tools/dev/firewall.ps1'),
+      'open', '-Ports', ports.join(','), '-WatchPid', String(process.pid),
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    pipeLines(portsProc.stdout, tagFor('ports'));
+    pipeLines(portsProc.stderr, tagFor('ports'));
+  }
+}
+
 process.stdout.write(
   `\n  stack: ${legacy ? 'legacy :8081' : 'control :8090 + game :8082'}` +
   `${withClient ? ' + client :5173' : ''}\n` +
+  `  saves: ${storeLabel()}${Object.keys(dotEnv).length ? '  (.env loaded)' : ''}\n` +
   (dev
     ? `  dev: F9 kit + F10 tester panel + warp, granted to this machine only\n`
+    : '') +
+  (openPorts && process.platform === 'win32'
+    ? `  ports: opening to your Tailscale network (approve the UAC prompt); they close when this stops\n`
     : '') +
   `  Ctrl-C stops everything.\n\n`,
 );

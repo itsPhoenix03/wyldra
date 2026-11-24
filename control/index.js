@@ -43,6 +43,20 @@ function sendJson(res, status, body) {
   res.end(buf);
 }
 
+// A world registered on localhost means "the machine this control plane runs on".
+// To a browser on another machine (LAN, Tailscale) localhost is that browser's OWN
+// machine, so its game socket would go nowhere. Hand back the host it used to reach
+// us instead. Only the asker's own response changes, so a forged Host header can
+// only misdirect the client that forged it.
+const LOOPBACK_WS = /^(wss?:\/\/)(?:localhost|127\.0\.0\.1|\[::1\])(?=[:/]|$)/i;
+function wsFor(ws, req) {
+  if (!LOOPBACK_WS.test(ws) || !req.headers.host) return ws;
+  let asked;
+  try { asked = new URL(`http://${req.headers.host}`).hostname; } catch { return ws; }
+  if (!asked || /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(asked)) return ws;
+  return ws.replace(LOOPBACK_WS, (_, scheme) => scheme + asked);
+}
+
 function handleJoin(req, res) {
   readJsonBody(req).then((body) => {
     const tok = typeof body.tok === 'string' ? body.tok.slice(0, 64) : null;
@@ -75,7 +89,7 @@ function handleJoin(req, res) {
       userId: profile.userId, worldId: world.worldId, instanceId: world.instanceId, name: profile.name,
       dev: profile.dev,
     });
-    sendJson(res, 200, { ticket, ws: world.ws, worldId: world.worldId, name: profile.name });
+    sendJson(res, 200, { ticket, ws: wsFor(world.ws, req), worldId: world.worldId, name: profile.name });
   }).catch((err) => sendJson(res, 400, { error: err.message }));
 }
 
@@ -85,10 +99,10 @@ function handleHealth(_req, res) {
 
 // Player-facing world list: display fields plus the address to connect to.
 // instanceId is an internal allocation detail and stays out of this response.
-function handleWorlds(_req, res) {
+function handleWorlds(req, res) {
   sendJson(res, 200, {
     defaultWorldId: getDefaultWorld().worldId,
-    worlds: getWorlds().map((w) => ({ worldId: w.worldId, name: w.name, seed: w.seed, ws: w.ws })),
+    worlds: getWorlds().map((w) => ({ worldId: w.worldId, name: w.name, seed: w.seed, ws: wsFor(w.ws, req) })),
   });
 }
 

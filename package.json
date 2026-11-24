@@ -6,6 +6,10 @@
   "scripts": {
     "start": "node tools/dev/stack.mjs",
     "start:dev": "node tools/dev/stack.mjs --dev",
+    "start:dev:open-ports": "node tools/dev/stack.mjs --dev --open-ports",
+    "ports:open": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/dev/firewall.ps1 open",
+    "ports:close": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/dev/firewall.ps1 close",
+    "ports:status": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/dev/firewall.ps1 status",
     "stack:servers": "node tools/dev/stack.mjs --dev --no-client",
     "start:legacy": "node tools/dev/stack.mjs --legacy --dev",
     "dev": "node tools/atlas/build-atlases.mjs && vite --host",

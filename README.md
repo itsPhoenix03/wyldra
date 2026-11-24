@@ -57,9 +57,14 @@ npm run start:dev  # same, with the dev tester (F9 kit, F10 panel) for loopback 
 ```
 
 Open <http://localhost:5173>, set a name, and pick **Play solo / default world** — or
-create a room and share its code. Open several tabs or browsers for local co-op. For LAN
-play, friends open `http://<your-ip>:5173`; allow Node.js and the game server through
-Windows Firewall (ports 5173, 8090, 8082) the first time.
+create a room and share its code. Open several tabs or browsers for local co-op.
+
+To play from other machines on your Tailscale network, start with
+`npm run start:dev:open-ports` and open `http://<this-machine's-tailscale-ip>:5173` there.
+It opens ports 5173, 8090 and 8082 in Windows Firewall for Tailscale only (one UAC prompt)
+and closes them when the stack stops. `npm run ports:open`, `ports:close` and
+`ports:status` manage them by hand; for a LAN, `npm run ports:open -- -Interface Wi-Fi`.
+See `tools/dev/firewall.ps1`.
 
 `npm start` needs [Go](https://go.dev/dl/) (the game server runs with `go run`). The old
 Node server is still available as `npm run start:legacy` (port 8081).
